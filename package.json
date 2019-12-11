@@ -1,7 +1,7 @@
 {
   "name": "com.unity.dots.runtime",
   "displayName": "DOTS Runtime",
-  "version": "0.1.0-preview.4",
+  "version": "0.1.0-preview.5",
   "unity": "2019.3",
   "unityRelease": "0f1",
   "description": "This package provides base support for DOTS Runtime",
@@ -18,6 +18,6 @@
   "repository": {
     "type": "git",
     "url": "git@github.com:Unity-Technologies/dots.git",
-    "revision": "6a204f440133272721ff4fff8ff4cc5276ab5fa0"
+    "revision": "d0001f5871034e556b314639fa82c76d4fd132dc"
   }
 }
