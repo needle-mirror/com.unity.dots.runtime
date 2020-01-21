@@ -97,6 +97,7 @@ namespace Unity.Collections.LowLevel.Unsafe
         // @@TODO buffer info...
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     public unsafe struct AtomicSafetyNode
     {
         internal int version0;
@@ -120,13 +121,18 @@ namespace Unity.Collections.LowLevel.Unsafe
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AtomicSafetyNodePatched
+    {
+        internal int version0;
+        internal int version1;
+        internal uint flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct AtomicSafetyHandle
     {
-#if (UNITY_IOS)
-        const string nativejobslib = "__Internal";
-#else
         const string nativejobslib = "nativejobs";
-#endif        
         [DllImport(nativejobslib, EntryPoint= "AtomicStack_Push")]
         private static extern unsafe void PushAtomicNode(void* node);
 
@@ -148,9 +154,16 @@ namespace Unity.Collections.LowLevel.Unsafe
         [DllImport(nativejobslib)]
         private static extern unsafe void* GetTempSliceHandle();
 
-        internal unsafe IntPtr nodePtrPtr;
-        internal unsafe IntPtr nodePtr;
+        internal unsafe AtomicSafetyNode** nodePtrPtr;
+        internal unsafe AtomicSafetyNode* nodePtr;
         internal int version;
+
+        // This is used in a job instead of the shared node, since different jobs may enforce
+        // different access to memory/object protected by the safety handle, and once we have
+        // verified the job can safely access it without race conditions etc., it should maintain
+        // it's own copy of required permissions in that moment for checking with actual code
+        // which accesses that memory/object.
+        internal unsafe AtomicSafetyNodePatched *nodeLocalPtr;
 
         //---------------------------------------------------------------------------------------------------
         #region Basic lifetime management
@@ -203,14 +216,14 @@ namespace Unity.Collections.LowLevel.Unsafe
             nodePtrPtr = (AtomicSafetyNode**)PopAtomicNode();
             if (*nodePtrPtr == null)
             {
-                *nodePtrPtr = (AtomicSafetyNode*)UnsafeUtility.Malloc(sizeof(AtomicSafetyNode), sizeof(AtomicSafetyNode), Allocator.Persistent);
+                *nodePtrPtr = (AtomicSafetyNode*)UnsafeUtility.Malloc(sizeof(AtomicSafetyNode), 0, Allocator.Persistent);
                 UnsafeUtility.MemClear(*nodePtrPtr, sizeof(AtomicSafetyNode));
             }
             nodePtr = *nodePtrPtr;
             nodePtr->Init();
 
-            handle.nodePtrPtr = (IntPtr)nodePtrPtr;
-            handle.nodePtr = (IntPtr)nodePtr;
+            handle.nodePtrPtr = nodePtrPtr;
+            handle.nodePtr = nodePtr;
             handle.version = nodePtr->version0;
         }
 
@@ -225,7 +238,7 @@ namespace Unity.Collections.LowLevel.Unsafe
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static AtomicSafetyHandle* CreateOnHeap()
         {
-            var handlePtr = (AtomicSafetyHandle*)UnsafeUtility.Malloc(sizeof(AtomicSafetyHandle), sizeof(AtomicSafetyHandle), Allocator.Persistent);
+            var handlePtr = (AtomicSafetyHandle*)UnsafeUtility.Malloc(sizeof(AtomicSafetyHandle), 0, Allocator.Persistent);
             InitHandle(ref *handlePtr);
             return handlePtr;
         }
@@ -244,7 +257,7 @@ namespace Unity.Collections.LowLevel.Unsafe
                 // Clear all protections and increment version to protect from any other remaining AtomicSafetyHandles
                 node->version0 = (node->version0 & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect) + AtomicSafetyNodeVersionMask.VersionInc;
                 node->version1 = (node->version1 & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect) + AtomicSafetyNodeVersionMask.VersionInc;
-                PushAtomicNode((void *)handle.nodePtrPtr);
+                PushAtomicNode(handle.nodePtrPtr);
             }
         }
 
@@ -254,19 +267,19 @@ namespace Unity.Collections.LowLevel.Unsafe
         #region Quick tests (often used to avoid executing much slower test code)
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal unsafe bool IsValid() => (nodePtr != IntPtr.Zero) &&
+        internal unsafe bool IsValid() => (nodePtr != null) &&
             (version == (UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe bool IsAllowedToWrite() => (nodePtr != IntPtr.Zero) &&
+        public unsafe bool IsAllowedToWrite() => (nodePtr != null) &&
             (version == (UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.VersionAndWriteProtect));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe bool IsAllowedToRead() => (nodePtr != IntPtr.Zero) &&
+        public unsafe bool IsAllowedToRead() => (nodePtr != null) &&
             (version == (UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.VersionAndReadProtect));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe bool IsAllowedToDispose() => (nodePtr != IntPtr.Zero) &&
+        public unsafe bool IsAllowedToDispose() => (nodePtr != null) &&
             (version == (UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.VersionAndDisposeProtect));
 
         #endregion
@@ -277,21 +290,20 @@ namespace Unity.Collections.LowLevel.Unsafe
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe int UncheckedGetNodeVersion() => 
             (version & AtomicSafetyNodeVersionMask.SecondaryVersion) == AtomicSafetyNodeVersionMask.SecondaryVersion ? 
-            ((AtomicSafetyNode*)nodePtr)->version1 : ((AtomicSafetyNode*)nodePtr)->version0;
+            nodePtr->version1 : nodePtr->version0;
 
         // Switches the AtomicSafetyHandle to the secondary version number
         // Also clears protections
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe void UseSecondaryVersion()
+        public unsafe void UncheckedUseSecondaryVersion()
         {
-            var node = GetInternalNode();
             if (UncheckedIsSecondaryVersion())
                 throw new System.InvalidOperationException("Already using secondary version");
-            version = node->version1 & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect;
+            version = nodePtr->version1 & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect;
         }
         public static unsafe void UseSecondaryVersion(ref AtomicSafetyHandle handle)
         {
-            handle.UseSecondaryVersion();
+            handle.UncheckedUseSecondaryVersion();
         }
 
         // Sets whether the secondary version is readonly (allowWriting = false) or readwrite (allowWriting= true)
@@ -341,7 +353,50 @@ namespace Unity.Collections.LowLevel.Unsafe
         #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region Used by CodeGen specifically (may convert to do like Unity JobsDebugger and set flags directly??)
+        #region Used by CodeGen specifically
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void PatchLocal(ref AtomicSafetyHandle handle)
+        {
+            // TODO fix the temp memory handles
+            if (IsTempMemoryHandle(handle)) 
+                return;
+
+            unsafe
+            {
+                if (handle.nodePtr == null)
+                    return;
+
+                handle.nodeLocalPtr = (AtomicSafetyNodePatched*)UnsafeUtility.Malloc(sizeof(AtomicSafetyNodePatched), 16, Allocator.TempJob);
+                *handle.nodeLocalPtr = *(AtomicSafetyNodePatched *)handle.nodePtr;
+                
+                // Clear bits marking this as a real AtomicSafetyNode
+                handle.nodeLocalPtr->flags ^= AtomicSafetyNodeFlags.Magic;
+                
+                handle.nodePtr = (AtomicSafetyNode*)handle.nodeLocalPtr;
+                handle.nodePtrPtr = null;
+
+                handle.version = handle.UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void UnpatchLocal(ref AtomicSafetyHandle handle)
+        {
+            // TODO fix the temp memory handles
+            if (IsTempMemoryHandle(handle))
+                return;
+
+            unsafe
+            {
+                if (handle.nodeLocalPtr == null)
+                    return;
+
+                UnsafeUtility.Free(handle.nodeLocalPtr, Allocator.TempJob);
+                handle.nodeLocalPtr = null;
+                handle.nodePtr = null;
+            }
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void SetAllowWriteOnly(ref AtomicSafetyHandle handle)
@@ -351,9 +406,8 @@ namespace Unity.Collections.LowLevel.Unsafe
 
             unsafe
             {
-                var node = handle.GetInternalNode();
-                node->version0 = (node->version0 & AtomicSafetyNodeVersionMask.WriteUnprotect) | AtomicSafetyNodeVersionMask.ReadProtect;
-                node->version1 = (node->version1 & AtomicSafetyNodeVersionMask.WriteUnprotect) | AtomicSafetyNodeVersionMask.ReadProtect;
+                handle.nodePtr->version0 = (handle.nodePtr->version0 & AtomicSafetyNodeVersionMask.WriteUnprotect) | AtomicSafetyNodeVersionMask.ReadProtect;
+                handle.nodePtr->version1 = (handle.nodePtr->version1 & AtomicSafetyNodeVersionMask.WriteUnprotect) | AtomicSafetyNodeVersionMask.ReadProtect;
             }
         }
 
@@ -365,9 +419,8 @@ namespace Unity.Collections.LowLevel.Unsafe
 
             unsafe
             {
-                var node = handle.GetInternalNode();
-                node->version0 = (node->version0 & AtomicSafetyNodeVersionMask.ReadUnprotect) | AtomicSafetyNodeVersionMask.WriteProtect;
-                node->version1 = (node->version1 & AtomicSafetyNodeVersionMask.ReadUnprotect) | AtomicSafetyNodeVersionMask.WriteProtect;
+                handle.nodePtr->version0 = (handle.nodePtr->version0 & AtomicSafetyNodeVersionMask.ReadUnprotect) | AtomicSafetyNodeVersionMask.WriteProtect;
+                handle.nodePtr->version1 = (handle.nodePtr->version1 & AtomicSafetyNodeVersionMask.ReadUnprotect) | AtomicSafetyNodeVersionMask.WriteProtect;
             }
         }
 
@@ -381,9 +434,8 @@ namespace Unity.Collections.LowLevel.Unsafe
         {
             if (!IsValid())
                 return null;
-            var realPtr = (AtomicSafetyNode*)nodePtr;
-            if ((realPtr->flags & AtomicSafetyNodeFlags.Magic) == AtomicSafetyNodeFlags.Magic)
-                return realPtr;
+            if ((nodePtr->flags & AtomicSafetyNodeFlags.Magic) == AtomicSafetyNodeFlags.Magic)
+                return nodePtr;
             throw new System.InvalidOperationException("AtomicSafetyNode has either been corrupted or is being accessed on a job which is not allowed");
         }
 
@@ -629,9 +681,8 @@ namespace Unity.Collections.LowLevel.Unsafe
                 CheckWriteAndThrow(handle);
             unsafe
             {
-                var node = handle.GetInternalNode();
-                node->version1 += AtomicSafetyNodeVersionMask.VersionInc;
-                UnityEngine.Assertions.Assert.IsTrue((node->version0 & AtomicSafetyNodeVersionMask.ReadWriteProtect) == (node->version1 & AtomicSafetyNodeVersionMask.ReadWriteProtect));
+                handle.nodePtr->version1 += AtomicSafetyNodeVersionMask.VersionInc;
+                UnityEngine.Assertions.Assert.IsTrue((handle.nodePtr->version0 & AtomicSafetyNodeVersionMask.ReadWriteProtect) == (handle.nodePtr->version1 & AtomicSafetyNodeVersionMask.ReadWriteProtect));
             }
         }
 

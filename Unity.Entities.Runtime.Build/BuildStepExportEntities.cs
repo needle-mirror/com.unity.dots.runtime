@@ -18,6 +18,8 @@ namespace Unity.Entities.Runtime.Build
 
         public override string Description => k_Description;
 
+        public BlobAssetStore m_BlobAssetStore;
+
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile),
@@ -34,12 +36,20 @@ namespace Unity.Entities.Runtime.Build
 
             var originalActiveScene = SceneManager.GetActiveScene();
 
+#if USE_INCREMENTAL_CONVERSION
+            m_BlobAssetStore = new BlobAssetStore();
+#endif
+
             void ExportSceneToFile(Scene scene, Guid guid)
             {
                 var outputFile = settings.DataDirectory.GetFile(guid.ToString("N"));
                 using (var exportWorld = new World("Export World"))
                 {
+#if USE_INCREMENTAL_CONVERSION
+                    var exportDriver = new TinyExportDriver(context, settings.DataDirectory, exportWorld, m_BlobAssetStore);
+#else
                     var exportDriver = new TinyExportDriver(context, settings.DataDirectory);
+#endif
                     exportDriver.DestinationWorld = exportWorld;
                     exportDriver.SceneGUID = new Hash128(guid.ToString("N"));
 
@@ -47,10 +57,6 @@ namespace Unity.Entities.Runtime.Build
 
                     GameObjectConversionUtility.ConvertScene(scene, exportDriver);
                     context.GetOrCreateValue<WorldExportTypeTracker>()?.AddTypesFromWorld(exportWorld);
-
-#if EXPORT_TINY_SHADER
-                    RenderSettingsConversion.ConvertRenderSettings(exportWorld.EntityManager);
-#endif
 
                     WorldExport.WriteWorldToFile(exportWorld, outputFile);
                     exportDriver.Write(manifest);
@@ -96,6 +102,10 @@ namespace Unity.Entities.Runtime.Build
             }
 
             SceneManager.SetActiveScene(originalActiveScene);
+
+#if USE_INCREMENTAL_CONVERSION
+            m_BlobAssetStore.Dispose();
+#endif
 
             return Success();
         }

@@ -4,9 +4,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Entities.Serialization;
 using Unity.Tiny.Codec;
-#if TINY_SCENE_DEP
-using Unity.Tiny.Scenes;
-#endif
+using Unity.Entities.Runtime;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -53,7 +51,6 @@ namespace Unity.Entities.Runtime.Build
                     throw new ArgumentException("We are serializing a world that contains UnityEngine.Object references which are not supported in Dots Runtime.");
                 }
 
-#if TINY_SCENE_DEP
                 unsafe
                 {
                     var worldHeader = new SceneHeader();
@@ -71,7 +68,6 @@ namespace Unity.Entities.Runtime.Build
                         fileStream.WriteBytes(entitiesWriter.Data, entitiesWriter.Length);
                     }
                 }
-#endif
             }
 
             return true;

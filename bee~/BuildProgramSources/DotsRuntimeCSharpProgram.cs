@@ -105,15 +105,10 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         Defines.Add(
             "UNITY_DOTSPLAYER",
             "NET_DOTS",
-            // TODO -- figure out what's gated with this, and if it should have a UNITY_DOTSPLAYER || ...
             "UNITY_2018_3_OR_NEWER",
-            // And these might not make sense for DOTS Runtime anyway beacuse they are UnityEngine/UnityEditor APIs.
-            // They break the build if we add them.
-            //"UNITY_2019_1_OR_NEWER",
-            //"UNITY_2019_2_OR_NEWER",
-            //"UNITY_2019_3_OR_NEWER",
-            // TODO -- removing this breaks Burst, it should be using DOTSPLAYER!
-            "UNITY_ZEROPLAYER"
+            "UNITY_2019_1_OR_NEWER",
+            "UNITY_2019_2_OR_NEWER",
+            "UNITY_2019_3_OR_NEWER"
         );
         
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WebGLPlatform, "UNITY_WEBGL");
@@ -139,6 +134,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
                 Sources.Add(new CustomProvideFiles(sourcePath));
             }
         }
+        bool hasCpp = false;
         foreach (var sourcePath in AllSourcePaths)
         {
             var cppFolder = sourcePath.Combine("cpp~");
@@ -154,6 +150,8 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
                 cppFiles = cppFolder.Files("*.c*", true);
                 ProjectFile.AdditionalFiles.AddRange(cppFolder.Files(true));
                 GetOrMakeNativeProgram().Sources.Add(cppFiles);
+
+                hasCpp = true;
             }
 
             if (prejsFolder.DirectoryExists())
@@ -189,6 +187,13 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
             if (includeFolder.DirectoryExists())
                 GetOrMakeNativeProgram().PublicIncludeDirectories.Add(includeFolder);
+        }
+
+        if (hasCpp)
+        {
+            GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is LinuxPlatform, new SystemLibrary("rt"));
+            GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is WindowsPlatform, new SystemLibrary("ws2_32.lib"));
+            NativeJobsPrebuiltLibrary.Add(GetOrMakeNativeProgram());
         }
 
         SupportFiles.Add(AllSourcePaths.SelectMany(p =>
@@ -281,7 +286,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         var dotsConfig = (DotsRuntimeCSharpProgramConfiguration) config;
 
         var npc = dotsConfig.NativeProgramConfiguration;
-        if (NativeProgram != null && NativeProgram.Sources.ForAny().Any())
+        if (NativeProgram != null && NativeProgram.Sources.ForAny().Any() && npc != null)
         {
             BuiltNativeProgram setupSpecificConfiguration = NativeProgram.SetupSpecificConfiguration(npc,
                 npc.ToolChain.DynamicLibraryFormat ?? npc.ToolChain.StaticLibraryFormat);
@@ -320,13 +325,24 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         public override IEnumerable<NPath> GetFiles()
         {
             var files = SourcePath.Files("*.cs",recurse:true);
+            var ignoreDirectories = FindDirectories();
+            return files.Where(f => f.HasExtension("cs") && !ignoreDirectories.Any(f.IsChildOf));
+        }
+
+        private List<NPath> FindDirectories()
+        {
             var beeDirs = SourcePath.Directories(true).Where(d => d.FileName == "bee~").ToList();
             var ignoreDirectories = SourcePath.Files("*.asm?ef", recurse: true)
                 .Where(f => f.Parent != SourcePath)
                 .Select(asmdef => asmdef.Parent)
                 .Concat(beeDirs)
                 .ToList();
-            return files.Where(f => f.HasExtension("cs") && !ignoreDirectories.Any(f.IsChildOf));
+            return ignoreDirectories;
+        }
+
+        public override IEnumerable<NPath> GetDirectories()
+        {
+            return SourcePath.Directories(true).Where(d => d.FileName == "bee~" && !FindDirectories().Any(d.IsChildOf));
         }
 
         public override IEnumerable<XElement> CustomMSBuildElements(NPath projectFileParentPath)
@@ -362,7 +378,15 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
 
     public DotsConfiguration DotsConfiguration { get; }
 
-    public Platform Platform => NativeProgramConfiguration.ToolChain.Platform;
+    private Platform _platform;
+    public Platform Platform
+    {
+        get
+        {
+            return _platform ?? NativeProgramConfiguration.ToolChain.Platform;
+        }
+        set { _platform = value; }
+    }
     
     public bool MultiThreadedJobs { get; private set; }
     

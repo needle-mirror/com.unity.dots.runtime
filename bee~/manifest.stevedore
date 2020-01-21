@@ -3,7 +3,7 @@
 # Comments and whitespace can e.g. be used to group by tool (e.g. all roslyn in one group).
 
 # il2cpp
-public: il2cpp/19.11.12_c58e59324f8db2864c223b6971319f851fd913a4a93ade3a8f2937003418a16f.7z
+public: il2cpp/20.01.15_0278b9a39aea65a1d51390857f48f49fe7ecc28e82d5be26658d9c4682f3a89e.7z
 public: MonoBleedingEdgeSub/acf432a39edc3865d3d97f1825d9576459049f6e_ecafea2afec824fb3f917fcf86ced28099849bc7174252d2929fb02b7e5b1b4b.7z
 
 # node
@@ -23,7 +23,7 @@ public: winpython2-x64/2.7.13.1Zero_740e3bbd4c2384963a0944dec446dc36ce7513df2786
 public: glfw/3.3_72f4d719b9e76e8be646ab0099df09a94ecb8d54778d174e60ca172091b9faef.7z
 
 # bgfx
-public: bgfx-source/2019110500_95ca282688099be4feb2bcec72a71b7b72e95bb18e9466de300ea3c54c39885d.7z
+public: bgfx-source/2019120600_422cd0060bcba910812e13e93004f3bcd45bdc81ea740601a9a614dee5839804.7z
 
 # emscripten
 public: emscripten/1.38.28.3-unity_46d4d8607b250ce403626b9831b749baa29e4050547620cd6f729044fd02ab52.7z

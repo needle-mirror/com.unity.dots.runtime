@@ -1,7 +1,7 @@
 #include "guard.h"
 
 #include <stdlib.h>
-#include "string.h"
+#include <string.h>
 #include <stdint.h>
 
 #ifdef DEBUG
@@ -18,7 +18,7 @@ void memfail() {
 
 #define GUARD_HEAP_POISON 0xec  // the underlying allocators should poison on free; but be very sure.
 
-static void guardcheck(unsigned char *p, unsigned char x, size_t s) {
+static void guardcheck(uint8_t* p, uint8_t x, size_t s) {
     for ( size_t i=0; i<s; i++ ) {
         if (p[i]!=x) {
             memfail();
@@ -27,41 +27,36 @@ static void guardcheck(unsigned char *p, unsigned char x, size_t s) {
     }
 }
 
-void setupGuardedMemory(size_t size, void* mem)
+void setupGuardedMemory(void* mem, int headerSize, int64_t size)
 {
+    uint8_t* user = (uint8_t*)mem;
+
+    // Setup head
+    GuardHeader* head = (GuardHeader*)(user - sizeof(GuardHeader));
+    head->size = size;
+    head->offset = headerSize;
+
+    // Setup buffer
     memset(mem, 0xbc, size);
 
-    uint8_t* r = (uint8_t*)mem;
-    GuardHeader *hstart = (GuardHeader*)(r - sizeof(GuardHeader));
-    GuardHeader *hend = (GuardHeader*)(r + size);
-
-    hstart->size = size;
-    memset(hstart->front, 0xf1, sizeof(hstart->front));
-    memset(hstart->back, 0xf2, sizeof(hstart->back));
-
-    memset(hend->front, 0xa1, sizeof(hend->front));
-    memset(hend->back, 0xa2, sizeof(hend->back));
-    hend->size = size;
+    // Setup tail
+    GuardFooter *tail = (GuardFooter*)(user + size);
+    memset(tail->front, 0xa1, sizeof(tail->front));
+    memset(tail->back, 0xa2, sizeof(tail->back));
 }
 
 void checkGuardedMemory(void* mem, bool poison)
 {
-    uint8_t* r = (uint8_t*)mem;
+    uint8_t* user = (uint8_t*)mem;
+    GuardHeader* head = (GuardHeader*)(user - sizeof(GuardHeader));
 
-    GuardHeader *hstart = (GuardHeader*)(r - sizeof(GuardHeader));
-    GuardHeader *hend = (GuardHeader*)(r + hstart->size);
+    GuardFooter* tail = (GuardFooter*)(user + head->size);
 
-    if ( hstart->size != hend->size) {
-        memfail();
-    }
-
-    guardcheck(hstart->front, 0xf1, sizeof(hstart->front));
-    guardcheck(hstart->back, 0xf2, sizeof(hstart->back));
-    guardcheck (hend->front, 0xa1, sizeof(hend->front));
-    guardcheck (hend->back, 0xa2, sizeof(hend->back));
+    guardcheck(tail->front, 0xa1, sizeof(tail->front));
+    guardcheck(tail->back, 0xa2, sizeof(tail->back));
 
     if (poison)
-        memset(mem, GUARD_HEAP_POISON, size_t(hstart->size));
+        memset(mem, GUARD_HEAP_POISON, (size_t)(head->size));
 }
 
 #endif

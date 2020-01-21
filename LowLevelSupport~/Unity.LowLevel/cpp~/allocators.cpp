@@ -1,11 +1,15 @@
+#include <allocators.h>
+#include <baselibext.h>
+#include <C/Baselib_Memory.h>
+
 #include "guard.h"
 #include "BumpAllocator.h"
 
 #include <stdlib.h>
 #include "string.h"
-#if !UNITY_SINGLETHREADED_JOBS
-#include <mutex>
-#endif
+
+using namespace Unity::LowLevel;
+
 #ifdef GUARD_HEAP
 #include <vector>
 #endif
@@ -22,7 +26,11 @@
 #define CALLEXPORT
 #endif
 
-
+// SSE requires 16 bytes alignment
+// AVX 256 is 32 bytes
+// AVX 512 is 64 bytes
+// Arm tends to be 4 bytes
+// Arm NEON can be up to 16 bytes (sometimes 2, 4, or 8 depending on instruction)
 #if INTPTR_MAX == INT64_MAX
 static const int ARCH_ALIGNMENT = 16;
 #elif INTPTR_MAX == INT32_MAX
@@ -31,110 +39,80 @@ static const int ARCH_ALIGNMENT = 8;
 #error Unknown pointer size or missing size macros!
 #endif
 
-#ifdef GUARD_HEAP
-static_assert(sizeof(GuardHeader) % ARCH_ALIGNMENT == 0, "The GuardHeader should be aligned to the architecture.");
-#endif
-
-enum class Allocator
-{
-    // NOTE: The items must be kept in sync with Runtime/Export/Collections/NativeCollectionAllocator.h
-    Invalid = 0,
-    // NOTE: this is important to let Invalid = 0 so that new NativeArray<xxx>() will lead to an invalid allocation by default.
-    None = 1,
-    Temp = 2,
-    TempJob = 3,
-    Persistent = 4
-};
-
-static BumpAllocator sBumpAlloc;
 static void* lastFreePtr = 0;
+static int64_t heapUsage[(int)Allocator::NumAllocators] = {0};   // Debugging, single threaded. (Needs mutex for MT).
 
 #ifdef GUARD_HEAP
-static std::vector<void*> sBumpMem;         // Seperately tracks memory in the bump allocator, so it can be checked with Guards
-#define SIZEOFGUARD sizeof(GuardHeader)
-#else
-#define SIZEOFGUARD 0
+static std::vector<void*> sBumpAllocTrack;         // Seperately tracks memory in the bump allocator, so it can be checked with Guards
 #endif
+static BumpAllocator sBumpAlloc;
+static baselib::Lock sBumpAllocMutex;
 
-#if !UNITY_SINGLETHREADED_JOBS
-static std::mutex sBumpAlloc_mutex;
-#endif
-
-/* How much memory to ask for, to be sure we have enough to be:
-   - aligned
-   - write the offset
-   - write the guards
-
-   Layout of memory:
-                        Size                    Description
-                        ----                    -----------
-    extendedMem         [varies]                Padding to guarantee alignment.
-                        ARCH_ALIGN              integer padded to the architecture alignment; 
-                                                number of bytes from extendedMem to mem
-    header              sizeof(GuardHeader)     memory guard; only in use of GUARD_HEAP is defined
-    mem                 size requested          Memory returned to client. Aligned.
-    tail                sizeof(GuardHeader)     memory guard; only in use of GUARD_HEAP is defined
-*/
-int64_t calcExtendedSize(int64_t size, int alignment)
+extern "C" 
 {
-    return alignment + ARCH_ALIGNMENT + SIZEOFGUARD + size + SIZEOFGUARD;
-}
 
-uintptr_t offsetFromMalloc(uint8_t* mem, int alignment)
-{
-    uintptr_t base = reinterpret_cast<uintptr_t>(mem);
-    uintptr_t ptr = base + ARCH_ALIGNMENT + SIZEOFGUARD;
-    ptr += alignment - 1;
-    ptr &= ~(alignment - 1);
-    return ptr - base;
-}
-
-extern "C"{
 DOEXPORT
-void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignment, Allocator allocatorType)
+void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignOf, Allocator allocatorType)
 {
-    // Always allocate memory so we can disambiguate between failed memory allocation (returns null = failure) and
-    // requested 0 sized allocation (should not be a failure). This matches Unity Runtime's MemoryManager's implementation,
-    // including defining size 1 before any other alignment or padding is calculated.
-    if (size == 0) size = 1;
-#ifdef GUARD_HEAP
-    // Align guards on both front and back of buffer
-    size = size + (ARCH_ALIGNMENT - 1) & ~(ARCH_ALIGNMENT - 1);
-#endif
-    if (alignment < ARCH_ALIGNMENT) alignment = ARCH_ALIGNMENT;
-    alignment = alignment + (ARCH_ALIGNMENT - 1) & ~(ARCH_ALIGNMENT - 1);
+    // Alignment is a power of 2
+    MEM_ASSERT(alignOf == 0 || ((alignOf - 1) & alignOf) == 0);
 
-    int64_t extendedSize = calcExtendedSize(size, alignment);
-    uint8_t* extendedMem = 0;
+    // Alignment is not greater than 65536
+    MEM_ASSERT(alignOf < 65536);
     
-    if (allocatorType == Allocator::Temp) {
-#if !UNITY_SINGLETHREADED_JOBS
-        std::lock_guard<std::mutex> guard(sBumpAlloc_mutex);
-#endif
-        extendedMem = (uint8_t*) sBumpAlloc.alloc((int)extendedSize, ARCH_ALIGNMENT);        
-    }
-    else {
-        extendedMem = (uint8_t*) malloc(size_t(extendedSize));
-#if TRACY_ENABLE
-        TracyAlloc(extendedMem, extendedSize);
-#endif
-    }
-    MEM_ASSERT(extendedMem != 0);
-    MEM_ASSERT((reinterpret_cast<uintptr_t>(extendedMem) & (ARCH_ALIGNMENT - 1)) == 0);
-
-    uintptr_t offset = offsetFromMalloc(extendedMem, alignment);
-    int* offsetPtr = reinterpret_cast<int*>(extendedMem + offset - ARCH_ALIGNMENT - SIZEOFGUARD);
-    *offsetPtr = offset;
+    if (alignOf < ARCH_ALIGNMENT)
+        alignOf = ARCH_ALIGNMENT;
 
 #ifdef GUARD_HEAP
-    setupGuardedMemory(size_t(size), extendedMem + offset);
-    if (allocatorType == Allocator::Temp) {
-        sBumpMem.push_back(extendedMem + offset);
-    }
+    heapUsage[(int)allocatorType] += size;
+
+    // Will need up to alignOf size extra at the head to make sure actual returned pointer is aligned to alignOf
+    // Will need at least 16 bytes for offset + size due to size is int64_t
+
+    // - Aligned base pointer
+    // -   [padding]
+    // -   <8 bytes> user buffer size
+    // -   <8 bytes> offset from aligned user pointer to aligned base pointer
+    // - Aligned user pointer
+    // -   <'size' bytes> allocated buffer
+    // - Unaligned "GuardHeader"
+    // -   <16 bytes> expected values to compare
+
+    int headerSize = alignOf < 16 ? 16 : alignOf;
+    int64_t paddedSize = headerSize + size + sizeof(GuardHeader);
+#else
+    int headerSize = 0;
+    int64_t paddedSize = size;
 #endif
 
-    MEM_ASSERT((reinterpret_cast<uintptr_t>(extendedMem + offset) & (alignment - 1)) == 0);
-    return extendedMem + offset;
+    void* memBase;
+    void* memUser;
+    if (allocatorType == Allocator::Temp)
+    {
+        BaselibLock lock(sBumpAllocMutex);
+        memBase = sBumpAlloc.alloc((int)paddedSize, alignOf);
+        memUser = (void*)((uint8_t*)memBase + headerSize);
+
+#ifdef GUARD_HEAP
+        sBumpAllocTrack.push_back(memUser);
+#endif
+    }
+    else
+    {
+        memBase = Baselib_Memory_AlignedAllocate(paddedSize, alignOf);
+        memUser = (void*)((uint8_t*)memBase + headerSize);
+
+        // Track memory size and pointer
+#ifdef TRACY_ENABLE
+        TracyAlloc(memUser, size);
+#endif
+    }
+
+#ifdef GUARD_HEAP
+    setupGuardedMemory(memUser, headerSize, size);
+#endif
+
+    return memUser;
 }
 
 DOEXPORT
@@ -160,13 +138,19 @@ void CALLEXPORT unsafeutility_free(void* ptr, Allocator allocatorType)
     if (allocatorType == Allocator::Temp)
         return;
 
-    int* offsetPtr = reinterpret_cast<int*>(static_cast<uint8_t*>(ptr) - ARCH_ALIGNMENT - SIZEOFGUARD);
-    int offset = *offsetPtr;
-    uint8_t* realPtr = static_cast<uint8_t*>(ptr) - offset;
-#if TRACY_ENABLE
-    TracyFree(realPtr);
+#ifdef TRACY_ENABLE
+    TracyFree(ptr);
 #endif
-    free(realPtr);
+
+#ifdef GUARD_HEAP
+    GuardHeader* head = (GuardHeader*)((uint8_t*)ptr - sizeof(GuardHeader));
+    void* realPtr = (void*)((uint8_t*)ptr - head->offset);
+    heapUsage[(int)allocatorType] -= head->size;
+#else
+    void* realPtr = ptr;
+#endif
+
+    Baselib_Memory_AlignedFree(realPtr);
 }
 
 DOEXPORT
@@ -177,6 +161,11 @@ void* CALLEXPORT unsafeutility_get_last_free_ptr()
     return lastFreePtr;
 }
 
+DOEXPORT
+long CALLEXPORT unsafeutility_get_heap_size(Allocator allocatorType)
+{
+    return (long) heapUsage[(int)allocatorType];
+}
 
 DOEXPORT
 void CALLEXPORT unsafeutility_memset(void* destination, char value, int64_t size)
@@ -193,16 +182,14 @@ void CALLEXPORT unsafeutility_memclear(void* destination, int64_t size)
 DOEXPORT
 void CALLEXPORT unsafeutility_freetemp()
 {
-#if !UNITY_SINGLETHREADED_JOBS
-    std::lock_guard<std::mutex> guard(sBumpAlloc_mutex);
-#endif
+    BaselibLock lock(sBumpAllocMutex);
 
 #ifdef GUARD_HEAP
-    for(size_t i=0; i<sBumpMem.size(); ++i) {
-        checkGuardedMemory(sBumpMem[i], true);
-    }
-    sBumpMem.clear();
-#endif    
+    for (void *ptr : sBumpAllocTrack)
+        checkGuardedMemory(ptr, true);
+    sBumpAllocTrack.clear();
+#endif
+
     sBumpAlloc.reset();
 }
 
@@ -261,6 +248,7 @@ void CALLEXPORT unsafeutility_memmove(void* dst, void* src, uint64_t size)
 
 
 typedef void (*Call_p)(void*);
+typedef void (*Call_pp)(void*, void*);
 typedef void (*Call_pi)(void*, int);
 
 DOEXPORT
@@ -269,6 +257,14 @@ void CALLEXPORT unsafeutility_call_p(void* f, void* data)
     MEM_ASSERT(f);
     Call_p func = (Call_p) f;
     func(data);
+}
+
+DOEXPORT
+void CALLEXPORT unsafeutility_call_pp(void* f, void* data1, void* data2)
+{
+    MEM_ASSERT(f);
+    Call_pp func = (Call_pp)f;
+    func(data1, data2);
 }
 
 DOEXPORT

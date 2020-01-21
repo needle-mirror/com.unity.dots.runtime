@@ -1,7 +1,7 @@
 using System.IO;
 using Unity.Build.Common;
 using UnityEditor;
-
+using Unity.Scenes.Editor;
 
 namespace Unity.Entities.Runtime.Build
 {

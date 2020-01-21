@@ -130,8 +130,28 @@ public class BuildProgram
         BurstCompiler.BurstExecutable = asmDefDescriptions.First(d => d.Name == "Unity.Burst")
             .Path.Parent.Parent.Combine(".Runtime/bcl.exe").QuoteForProcessStart();
 
-        var ilPostProcessorPrograms = asmDefDescriptions.Where(d => d.Name.EndsWith(".CodeGen") && !d.DefineConstraints.Contains("!NET_DOTS")).Select(GetOrMakeDotsRuntimeCSharpProgramFor);
-        ILPostProcessorAssemblies = ilPostProcessorPrograms.Select(p => p.SetupSpecificConfiguration(DotsConfigs.HostDotnet)).ToArray();
+        var ilPostProcessorPrograms = asmDefDescriptions
+            .Where(d => d.Name.EndsWith(".CodeGen") && !d.DefineConstraints.Contains("!NET_DOTS"))
+            .Select(GetOrMakeDotsRuntimeCSharpProgramFor);
+        ILPostProcessorAssemblies = ilPostProcessorPrograms.Select(p =>
+            {
+                /*
+                 * We want to compile the ilpp's for hostdotnet, even though we might be compiling the actual game
+                 * for something else (e.g. wasm). The ilpp's may reference actual game assemblies, which may have
+                 * native code. We do not want to set up the native code for those game assemblies for hostdotnet,
+                 * because a) it makes no sense and b) the native toolchains might not be installed, and it would be
+                 * dumb to require that to build for an unrelated platform.
+                 *
+                 * So, set the NativeProgramConfiguration to null, and set up with that. But first, set the platform,
+                 * because normally the platform comes from the npc.
+                 */
+                var tmp = DotsConfigs.HostDotnet;
+                tmp.Platform = DotsConfigs.HostDotnet.Platform;
+                tmp.NativeProgramConfiguration = null;
+                var ret = p.SetupSpecificConfiguration(tmp);
+                return ret;
+            })
+            .ToArray();
         PerConfigBuildSettings = DotsConfigs.MakeConfigs();
 
         var tinyMainAsmDefs = asmDefDescriptions;//.Where(d => d.NamedReferences.Contains("Unity.Tiny.Main"));
@@ -150,7 +170,6 @@ public class BuildProgram
         {
             var buildProjRef = new CSharpProjectFileReference("buildprogram.gen.csproj");
             vs.Projects.Add(buildProjRef, unityToolsFolder);
-            vs.Projects.Add(buildProjRef, unityILPostProcessorsFolder);
         }
 
         foreach (var gameProgram in gamePrograms)

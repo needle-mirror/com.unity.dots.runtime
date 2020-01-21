@@ -246,11 +246,14 @@ namespace Unity.ZeroPlayer
 
             m_fieldInfoGen = new FieldInfoGen(typeGenInfoList, m_ArchBits, m_TypeRegAssembly, m_EntityAssembly);
             m_executeGen = new ExecuteGen(m_AssemblyDefs);
-            m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_ArchBits);
+            m_interfaceGen = new InterfaceGen(m_AssemblyDefs);
 
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
-            m_interfaceGen.AddGenExecuteMethodMethods();
+            m_executeGen.PatchForEachInterface();
+            m_executeGen.GenerateForEachMethods();
+            m_interfaceGen.InjectBurstInfrastructureMethods();
+
             PatchCalls();
 
             m_TypeRegAssembly.MainModule.Types.Add(m_RegClass);
@@ -594,10 +597,8 @@ namespace Unity.ZeroPlayer
             {
                 if (method.HasBody)
                 {
-                    // The goal here is to scan a subset of methods; there just happens to be a one to one
-                    // mapping. When we scan something else, it can bucked into the Call or Callvirt group.
                     var outerGIList = method.Body.Instructions.Where(i => i.OpCode == OpCodes.Call);
-                    m_executeGen.PatchScheduleCallsAndGenerateIL(type, asm, method, outerGIList);
+                    m_executeGen.PatchScheduleCalls(asm, outerGIList);
                     m_fieldInfoGen.PatchFieldInfoCalls(type, asm, method);
                 }
             }
@@ -704,11 +705,11 @@ namespace Unity.ZeroPlayer
             {
                 // Declare & implements: static public CreateSystem()
                 m_Systems = SystemTypeGen.GetSystems(m_AssemblyDefs);
-                var createSystemsFn = SystemTypeGen.GenCreateSystems(m_Systems, m_AssemblyDefs, m_TypeRegAssembly.MainModule, m_GetTypeFromHandleFnRef, m_InvalidOpExceptionCTORRef);
+                var createSystemsFn = SystemTypeGen.GenCreateSystems(m_Systems, m_AssemblyDefs, m_TypeRegAssembly.MainModule, m_GetTypeFromHandleFnRef, m_ArgumentExceptionCTORRef);
                 m_RegClass.Methods.Add(createSystemsFn);
 
                 // Declares: static public GetSystemAttributes()
-                var getSystemAttributesFn = SystemTypeGen.GenGetSystemAttributes(m_Systems, m_AssemblyDefs, m_TypeRegAssembly.MainModule, m_GetTypeFromHandleFnRef, m_InvalidOpExceptionCTORRef);
+                var getSystemAttributesFn = SystemTypeGen.GenGetSystemAttributes(m_Systems, m_AssemblyDefs, m_TypeRegAssembly.MainModule, m_GetTypeFromHandleFnRef, m_ArgumentExceptionCTORRef);
                 m_RegClass.Methods.Add(getSystemAttributesFn);
             }
 
@@ -803,7 +804,7 @@ namespace Unity.ZeroPlayer
                 bc[branchToNext] = Instruction.Create(OpCodes.Brfalse_S, nextTest);
             }
             bc.Add(Instruction.Create(OpCodes.Ldstr, "FATAL: Tried to construct a type that is unknown to the StaticTypeRegistry"));
-            bc.Add(Instruction.Create(OpCodes.Newobj, m_InvalidOpExceptionCTORRef));
+            bc.Add(Instruction.Create(OpCodes.Newobj, m_ArgumentExceptionCTORRef));
             bc.Add(Instruction.Create(OpCodes.Throw));
             return createComponentFn;
         }
@@ -2054,6 +2055,9 @@ namespace Unity.ZeroPlayer
             m_IntPtrGetSizeFnRef = m_TypeRegAssembly.MainModule.ImportReference(m_MscorlibAssembly.MainModule.GetType("System.IntPtr")
                 .Methods
                 .First(m => m.Name == "get_Size"));
+            m_ArgumentExceptionCTORRef = m_TypeRegAssembly.MainModule.ImportReference(m_MscorlibAssembly.MainModule.GetType("System.ArgumentException")
+                .Methods
+                .First(m => m.Name == ".ctor" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "String"));
             m_InvalidOpExceptionCTORRef = m_TypeRegAssembly.MainModule.ImportReference(m_MscorlibAssembly.MainModule.GetType("System.InvalidOperationException")
                 .Methods
                 .First(m => m.Name == ".ctor" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "String"));
@@ -2219,6 +2223,7 @@ namespace Unity.ZeroPlayer
         MethodReference m_MemCpyFnRef;
         TypeDefinition m_BufferHeaderDef;
         MethodReference m_IntPtrGetSizeFnRef;
+        MethodReference m_ArgumentExceptionCTORRef;
         MethodReference m_InvalidOpExceptionCTORRef;
         MethodReference m_Hash32FnRef;
 

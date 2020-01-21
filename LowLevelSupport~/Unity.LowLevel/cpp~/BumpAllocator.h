@@ -28,13 +28,13 @@ public:
     }
 
     void reset() {
-        // we're going to keep the first chunk arond, because chances are 16k per frame is all we'll need
+        // we're going to keep the first chunk around, because chances are 16k per frame is all we'll need
         if (!mCurChunk)
             return;
         while (*(void**)mCurChunk != nullptr) {
             void *chunk = mCurChunk;
             mCurChunk = *(void**)mCurChunk;
-            free(chunk);
+            Baselib_Memory_AlignedFree(chunk);
         }
 
         mCurPtr = ((uint8_t*)mCurChunk) + sizeof(intptr_t);
@@ -48,9 +48,10 @@ protected:
     uint8_t* mCurPtr;
 
     void newChunk(size_t neededSize) {
-        neededSize += 32; // align forever // sizeof(intptr_t);
         size_t sz = neededSize < mChunkSize ? mChunkSize : neededSize;
-        void* chunk = malloc(sz);
+
+        // storing a pointer at the head - ensure naturally aligned
+        void* chunk = Baselib_Memory_AlignedAllocate(sz, sizeof(size_t));
 
         // stuff the pointer back to the current chunk at the start of this chunk
         *(void**)chunk = mCurChunk;

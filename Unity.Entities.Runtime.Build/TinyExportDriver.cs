@@ -24,11 +24,19 @@ namespace Unity.Entities.Runtime.Build
         readonly DirectoryInfo m_ExportDataRoot;
         readonly Dictionary<Object, Item> m_Items = new Dictionary<Object, Item>();
 
+#if USE_INCREMENTAL_CONVERSION
+        public TinyExportDriver(BuildContext context, DirectoryInfo exportDataRoot, World destinationWorld, BlobAssetStore blobAssetStore) : base(destinationWorld, GameObjectConversionUtility.ConversionFlags.AddEntityGUID, blobAssetStore)
+        {
+            BuildSettings = BuildContextInternals.GetBuildSettings(context);
+            m_ExportDataRoot = exportDataRoot;
+        }
+#else
         public TinyExportDriver(BuildContext context, DirectoryInfo exportDataRoot)
         {
             BuildSettings = BuildContextInternals.GetBuildSettings(context);
             m_ExportDataRoot = exportDataRoot;
         }
+#endif
 
         public override Guid GetGuidForAssetExport(Object asset)
         {

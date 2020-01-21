@@ -105,7 +105,6 @@ public static class Il2Cpp
             this.DynamicLinkerSettingsForEmscripten().Add(c =>
                 c.WithShellFile(BuildProgram.BeeRoot.Combine("shell.html")));
 
-
             Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Combine("tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
@@ -122,7 +121,17 @@ public static class Il2Cpp
             NPath[] il2cppGeneratedFiles = SetupInvocation(setupGame, config);
             //todo: stop comparing identifier.
             Sources.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, il2cppGeneratedFiles);
-            Libraries.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, setupGame.RecursiveRuntimeDependenciesIncludingSelf.SelectMany(r=>r.Deployables.OfType<StaticLibrary>()));
+            var staticLibs = setupGame.RecursiveRuntimeDependenciesIncludingSelf.SelectMany(r=>r.Deployables.OfType<StaticLibrary>());
+            Libraries.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, staticLibs);
+
+            // force pinvoke internal for static libraries
+            staticLibs.ForEach(l => Defines.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, PinvokeInternalDefineFor(l)));
+        }
+
+        private string PinvokeInternalDefineFor(IDeployable staticLib)
+        {
+            var validLib = new NPath(staticLib.ToString()).FileNameWithoutExtension.Replace('-', '_').Replace('.', '_');
+            return $"FORCE_PINVOKE_{validLib}_INTERNAL=1";
         }
     }
 
@@ -316,7 +325,7 @@ public static class Il2Cpp
             PublicIncludeDirectories =
                 {
                 Distribution.Path.Combine(libil2cppname),
-                Distribution.Path.Combine("libil2cpp"),
+                Distribution.Path.Combine("libil2cpp")
                 },
             PublicDefines =
             {
@@ -355,6 +364,7 @@ public static class Il2Cpp
             program.Sources.Add(Distribution.GetFileList("libil2cpp/utils"));
             program.Sources.Add(Distribution.GetFileList("libil2cpp/vm-utils"));
             program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp"));
+            program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp", "pch"));
         }
         else
         {
@@ -502,7 +512,7 @@ public static class Il2Cpp
         program.CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
 
         // Use Baselib headers and library code from the NativeJobs library.
-        CustomizerForZeroJobs.NativeJobsPrebuiltLibrary.Add(program);
+        NativeJobsPrebuiltLibrary.Add(program);
 
         //program.CompilerSettingsForMsvc().Add(l => l.WithCompilerRuntimeLibrary(CompilerRuntimeLibrary.None));
 

@@ -57,7 +57,9 @@ static class TypeRegistrationTool
             ReferenceAssemblies471.Paths,
             EntityBuildUtils,
             StevedoreUnityCecil.Paths,
-            StevedoreNewtonsoftJson.Paths
+            StevedoreNewtonsoftJson.Paths,
+            Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.Common.dll"),
+            Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.dll"),
         },
         LanguageVersion = "7.3",
         ProjectFilePath = "TypeRegGen.csproj"

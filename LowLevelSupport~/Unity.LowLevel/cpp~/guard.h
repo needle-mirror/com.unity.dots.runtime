@@ -17,18 +17,21 @@ void memfail();
 
 #ifdef GUARD_HEAP
 
-/* Aligned to a 16 byte size, so it doesn't impact alignment computation. */
 struct GuardHeader {
-    static const int PAD = 16;
     int64_t size;
-    int64_t _pad;
+    int64_t offset;
+};
+
+struct GuardFooter {
+    static const int PAD = 8;
     uint8_t front[PAD];
     uint8_t back[PAD];
 };
 
 // Pointer to the memory that will be returned; setting up the padding
 // is done before this call.
-void setupGuardedMemory(size_t requestedSize, void* mem);
+void setupGuardedMemory(void* mem, int headerSize, int64_t size);
 void checkGuardedMemory(void* mem, bool poison);
+
 #endif
 

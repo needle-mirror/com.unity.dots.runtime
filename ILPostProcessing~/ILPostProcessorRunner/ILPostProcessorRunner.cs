@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using CommandLine;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
@@ -159,24 +160,25 @@ public class ILPostProcessorRunner
     {
         bool hasError = false;
 
+        StringBuilder sb = new StringBuilder();
         foreach (var diagMsg in messageList)
         {
-            bool isError = false;
             if (diagMsg.DiagnosticType == DiagnosticType.Error)
             {
                 hasError = true;
-                isError = true;
             }
 
-            Console.WriteLine(
-                $"[{(isError ? "ERROR" : "WARN")}]\t{diagMsg.MessageData}\n" +
-                $"File:\t{diagMsg.File} (Line: {diagMsg.Line}, Char {diagMsg.Column})"
-            );
-        }
+            if (!string.IsNullOrEmpty(diagMsg.File))
+                sb.Append($"{diagMsg.File}({diagMsg.Line},{diagMsg.Column}): ");
+
+            sb.Append($"{diagMsg.MessageData}\n");
+        } 
+
+        Console.WriteLine(sb.ToString());
 
         if (hasError)
         {
-            throw new Exception($"ILPostProcessorRunner '{ilppName}' had a fatal error processing '{asmName}'\n " +
+            throw new Exception($"ILPostProcessorRunner '{ilppName}' had a fatal error processing '{asmName}'\n" +
                 $"Refer to diagnostic messages above for more details. \n" +
                 $"Exiting..."
             );

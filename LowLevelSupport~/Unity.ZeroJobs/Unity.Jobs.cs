@@ -20,6 +20,10 @@ namespace Unity.Jobs
         unsafe void CleanupJobFn_Gen(void* ptr);
         // Retrieves the ExecuteMethod.
         JobsUtility.ManagedJobForEachDelegate GetExecuteMethod_Gen();
+        // Retrieves the UnmanagedJobSize
+        int GetUnmanagedJobSize_Gen();
+        // Retrieves the job's Marshal method.
+        JobsUtility.ManagedJobMarshalDelegate GetMarshalMethod_Gen();
     }
 
     internal class MonoPInvokeCallbackAttribute : Attribute

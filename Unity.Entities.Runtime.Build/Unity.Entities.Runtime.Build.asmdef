@@ -17,10 +17,7 @@
         "Unity.Serialization",
         "Unity.Tiny.Codec",
         "Unity.Tiny.Codec.Editor",
-        "Unity.Tiny.Core",
-        "Unity.Tiny.Rendering.Native",
-        "Unity.Tiny.Rendering",
-        "Unity.Tiny.Scenes"
+        "Unity.Tiny.Core"
     ],
     "includePlatforms": [
         "Editor"
@@ -35,14 +32,14 @@
     "defineConstraints": [],
     "versionDefines": [
         {
-            "name": "com.unity.tiny.rendering",
-            "expression": "0.0.1",
-            "define": "EXPORT_TINY_SHADER"
+            "name": "com.unity.entities",
+            "expression": "(0.4.0-preview.10,)",
+            "define": "USE_INCREMENTAL_CONVERSION"
         },
         {
             "name": "com.unity.tiny",
             "expression": "0.0.1",
-            "define": "TINY_SCENE_DEP"
+            "define": "UNITY_TINY"
         }
     ],
     "noEngineReferences": false
