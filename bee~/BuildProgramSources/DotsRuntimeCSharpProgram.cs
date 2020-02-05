@@ -144,12 +144,15 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             var beeFolder = sourcePath.Combine("bee~");
             var includeFolder = cppFolder.Combine("include");
 
-            NPath[] cppFiles = Array.Empty<NPath>();
             if (cppFolder.DirectoryExists())
             {
-                cppFiles = cppFolder.Files("*.c*", true);
                 ProjectFile.AdditionalFiles.AddRange(cppFolder.Files(true));
+
+                var cppFiles = cppFolder.Files("*.c*", true);
                 GetOrMakeNativeProgram().Sources.Add(cppFiles);
+
+                var mmFiles = cppFolder.Files("*.m*", true);
+                GetOrMakeNativeProgram().Sources.Add(c => (c.Platform is MacOSXPlatform || c.Platform is IosPlatform), mmFiles);
 
                 hasCpp = true;
             }

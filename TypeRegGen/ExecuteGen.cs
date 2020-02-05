@@ -257,15 +257,21 @@ namespace Unity.ZeroPlayer
 
             for (int i = 0; i < executeParams.Count; ++i)
             {
-                if (executeParams[i].ParameterType.FullName.StartsWith("Unity.Entities.DynamicBuffer"))
+                var paramType = executeParams[i].ParameterType;
+                if (paramType.FullName.StartsWith("Unity.Entities.DynamicBuffer"))
                 {
+                    var gi = paramType as GenericInstanceType;
+                    paramType = gi.GenericArguments[0];
+                    if (!paramType.IsComponentType())
+                        throw new ArgumentException($"Execute function for job struct {jobStruct.FullName} contains a generic param that doesn't contain a component as the first generic argument. Found '{paramType.FullName}'");
+
                     builder.Append("B");
-                    genericArgs.Add(executeParams[i].ParameterType.GetElementType());
+                    genericArgs.Add(paramType);
                 }
                 else
                 {
                     builder.Append("C");
-                    genericArgs.Add(executeParams[i].ParameterType.GetElementType());
+                    genericArgs.Add(paramType.GetElementType());
                 }
             } 
 
@@ -355,8 +361,7 @@ namespace Unity.ZeroPlayer
             List<TypeDefinition> require = new List<TypeDefinition>();
             List<TypeDefinition> exclude = new List<TypeDefinition>();
 
-            if (jobStruct.Interfaces.First(i =>
-                    i.InterfaceType.FullName == "Unity.Entities.JobForEachExtensions/IBaseJobForEach") != null)
+            if (jobStruct.IsStructWithInterface("Unity.Entities.JobForEachExtensions/IBaseJobForEach"))
             {
                 foreach (var attr in jobStruct.CustomAttributes)
                 {
@@ -375,9 +380,12 @@ namespace Unity.ZeroPlayer
                                 CustomAttributeArgument[] caa = cArr;
                                 for (int i = 0; i < caa.Length; ++i)
                                 {
-                                    if (caa[i].Value is TypeDefinition)
+                                    // In the same assembly, we get by a TypeDef,
+                                    // in a different assembly, a TypeRef.
+                                    var val = caa[i].Value;
+                                    if (val is TypeReference)
                                     {
-                                        TypeDefinition td = (TypeDefinition) caa[i].Value;
+                                        TypeDefinition td = ((TypeReference)val).Resolve();
                                         if (hasExclude) exclude.Add(td);
                                         if (hasRequire) require.Add(td);
                                     }
@@ -390,9 +398,24 @@ namespace Unity.ZeroPlayer
 
             for (int i = 0; i < executeParams.Count; ++i)
             {
+                TypeReference componentRef = null;
+                var paramType = executeParams[i].ParameterType;
+                if (paramType.IsGenericInstance && paramType.FullName.StartsWith("Unity.Entities.DynamicBuffer"))
+                {
+                    var gi = paramType as GenericInstanceType;
+                    var componentType = gi.GenericArguments[0];
+                    if (!componentType.IsComponentType())
+                        throw new ArgumentException($"Execute function for job struct {jobStruct.FullName} contains a generic param that doesn't contain a component as the first generic argument. Found '{componentType.FullName}'");
+                    componentRef = componentType;
+                }
+                else
+                {
+                    componentRef = paramType.GetElementType(); 
+                }
+                
                 comps.Add(new Component()
                 {
-                    type = executeParams[i].ParameterType.GetElementType(),
+                    type = componentRef,
                     access = ParamIsReadOnly(executeParams[i]) ? Access.ReadOnly : Access.ReadWrite
                 });
             }

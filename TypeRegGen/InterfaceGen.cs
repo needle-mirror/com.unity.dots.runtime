@@ -1031,8 +1031,15 @@ namespace Unity.ZeroPlayer
                 for(int i = 0; i < genericArgs.Count; ++i)
                 {
                     var ga = genericArgs[i];
-                    if (ga.IsByReference)
+                    if (ga.FullName.StartsWith("Unity.Entities.DynamicBuffer"))
+                    {
+                        var gi = ga as GenericInstanceType;
+                        genericArgs[i] = module.ImportReference(gi.GenericArguments[0].Resolve());
+                    }
+                    else if (ga.IsByReference)
+                    {
                         genericArgs[i] = module.ImportReference(ga.Resolve());
+                    }
                 }
 
                 MethodReference ftn = module.ImportReference(genExecuteMethod).MakeHostInstanceGeneric(genericArgs.ToArray());

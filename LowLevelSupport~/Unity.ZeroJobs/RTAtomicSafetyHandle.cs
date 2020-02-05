@@ -144,13 +144,13 @@ namespace Unity.Collections.LowLevel.Unsafe
         // not be a constant. This is a temp solution to avoid a static member. It is being
         // replaced with a frame-scoped system.
         [DllImport(nativejobslib)]
-        private static extern unsafe void* SetTempMemSafetyHandle(void* node);// from per-frame/bump allocator
+        private static extern unsafe void SetTempMemSafetyHandle(void* node);// from per-frame/bump allocator
         [DllImport(nativejobslib)]
         private static extern unsafe void* GetTempMemSafetyHandle();
 
         // Needed for com.unity.physics
         [DllImport(nativejobslib)]
-        private static extern unsafe void* SetTempSliceHandle(void* node);
+        private static extern unsafe void SetTempSliceHandle(void* node);
         [DllImport(nativejobslib)]
         private static extern unsafe void* GetTempSliceHandle();
 

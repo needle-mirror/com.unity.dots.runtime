@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
+using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -23,19 +24,6 @@ namespace Unity.Entities.Runtime.Build
         {
             typeof(OutputBuildDirectory)
         };
-
-        void AddConfigurationSystems(ConfigurationSystemGroup group, World world, DotsRuntimeBuildProfile profile, UnityEngine.SceneManagement.Scene projectScene)
-        {
-            var systems = UnityEditor.TypeCache.GetTypesDerivedFrom(typeof(ConfigurationSystemBase));
-            foreach (var type in systems)
-            { 
-                ConfigurationSystemBase baseSys = (ConfigurationSystemBase)world.GetOrCreateSystem(type);
-                baseSys.profile = profile;
-                baseSys.projectScene = projectScene;
-                group.AddSystemToUpdateList(baseSys);
-            }
-            group.SortSystemUpdateList();
-        }
 
         void WriteDebugFile(BuildContext context, BuildManifest manifest, DotsRuntimeBuildProfile profile)
         {
@@ -94,6 +82,7 @@ namespace Unity.Entities.Runtime.Build
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
             var scenes = GetRequiredComponent<SceneList>(context);
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
+            var buildSettings = BuildContextInternals.GetBuildSettings(context);
 
             using (var loadedSceneScope = new LoadedSceneScope(firstScene))
             {
@@ -105,7 +94,15 @@ namespace Unity.Entities.Runtime.Build
 
                     // Run configuration systems
                     ConfigurationSystemGroup configSystemGroup = tmpWorld.GetOrCreateSystem<ConfigurationSystemGroup>();
-                    AddConfigurationSystems(configSystemGroup, tmpWorld, profile, projectScene);
+                    var systems = UnityEditor.TypeCache.GetTypesDerivedFrom(typeof(ConfigurationSystemBase));
+                    foreach (var type in systems)
+                    {
+                        ConfigurationSystemBase baseSys = (ConfigurationSystemBase)tmpWorld.GetOrCreateSystem(type);
+                        baseSys.projectScene = projectScene;
+                        baseSys.buildSettings = buildSettings;
+                        configSystemGroup.AddSystemToUpdateList(baseSys);
+                    }
+                    configSystemGroup.SortSystemUpdateList();
                     configSystemGroup.Update();
 
                     // Export configuration scene

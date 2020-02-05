@@ -16,8 +16,7 @@
         "Unity.Scenes.Hybrid",
         "Unity.Serialization",
         "Unity.Tiny.Codec",
-        "Unity.Tiny.Codec.Editor",
-        "Unity.Tiny.Core"
+        "Unity.Tiny.Codec.Editor"
     ],
     "includePlatforms": [
         "Editor"
@@ -35,11 +34,6 @@
             "name": "com.unity.entities",
             "expression": "(0.4.0-preview.10,)",
             "define": "USE_INCREMENTAL_CONVERSION"
-        },
-        {
-            "name": "com.unity.tiny",
-            "expression": "0.0.1",
-            "define": "UNITY_TINY"
         }
     ],
     "noEngineReferences": false

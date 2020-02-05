@@ -1,4 +1,5 @@
 ﻿using UnityEngine.SceneManagement;
+using Unity.Build;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -13,7 +14,7 @@ namespace Unity.Entities.Runtime.Build
     /// </summary>
     public abstract partial class ConfigurationSystemBase : ComponentSystem
     {
-        public DotsRuntimeBuildProfile profile;
         public Scene projectScene;
+        public BuildSettings buildSettings;
     }
 }

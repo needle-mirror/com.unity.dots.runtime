@@ -103,9 +103,9 @@ public static class Il2Cpp
             Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null, "FORCE_PINVOKE_INTERNAL=1");
 
             this.DynamicLinkerSettingsForEmscripten().Add(c =>
-                c.WithShellFile(BuildProgram.BeeRoot.Combine("shell.html")));
+                c.WithShellFile(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_shell.html")));
 
-            Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Combine("tiny_runtime.js")));
+            Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithExceptions(true));
