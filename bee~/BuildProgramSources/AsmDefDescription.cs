@@ -51,7 +51,16 @@ public class AsmDefDescription
     public List<AsmRefDescription> IncludedAsmRefs { get; }
 
     public string[] NamedReferences => Json["references"]?.Values<string>().ToArray() ?? Array.Empty<string>();
-    public AsmDefDescription[] References => NamedReferences.Select(AsmDefConfigFile.AsmDefDescriptionFor).Where(d => d != null&& IsSupported(d.Name)).ToArray();
+
+    public bool NeedsEntryPointAdded()
+    {
+        return !DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") && References.All(r => r.NeedsEntryPointAdded());
+    }
+
+    public AsmDefDescription[] References =>
+        NamedReferences.Select(AsmDefConfigFile.AsmDefDescriptionFor)
+            .Where(d => d != null && IsSupported(d.Name))
+            .ToArray();
 
     public Platform[] IncludePlatforms => ReadPlatformList(Json["includePlatforms"]);
     public Platform[] ExcludePlatforms => ReadPlatformList(Json["excludePlatforms"]);
@@ -61,6 +70,8 @@ public class AsmDefDescription
     public string[] DefineConstraints => Json["defineConstraints"]?.Values<string>().ToArray() ?? Array.Empty<string>();
 
     public string[] OptionalUnityReferences => Json["optionalUnityReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
+    
+    public bool IsTinyRoot { get; set; }
     
 
     private static Platform[] ReadPlatformList(JToken platformList)
@@ -97,9 +108,9 @@ public class AsmDefDescription
             }
         }
     }
-    private bool IsSupported(string referenaceName)
+    private bool IsSupported(string referenceName)
     {
-        if (referenaceName.Contains("Unity.Collections.Tests"))
+        if (referenceName.Contains("Unity.Collections.Tests"))
             return false;
 
         return true;

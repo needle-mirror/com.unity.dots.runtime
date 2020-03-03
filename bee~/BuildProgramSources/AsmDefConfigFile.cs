@@ -27,12 +27,6 @@ static class AsmDefConfigFile
 
     public static string ProjectName { get; }
 
-    public static void InjectAsmDef(NPath path, string packageSource = "BuiltIn")
-    {
-        var asmdef = new AsmDefDescription(path, packageSource);
-        _namesToAsmDefDescription[asmdef.Name] = asmdef;
-    }
-
     public static AsmDefDescription AsmDefDescriptionFor(string asmdefname)
     {
         if (_namesToAsmDefDescription.TryGetValue(asmdefname, out var result))

@@ -33,10 +33,11 @@ namespace Unity.Entities.Runtime.Build
                     continue;
 
                 var buildTarget = BuildTarget.AvailableBuildTargets
-                    .Where(t => t.CanBuild)
-                    .Where(t => !string.IsNullOrEmpty(t.BeeTargetName) && t.BeeTargetName.Contains(targetInfo[1]))
-                    .FirstOrDefault();
-                var asmdef = validTargets.Where(t => t.FileNameWithoutExtension == targetInfo[0]).FirstOrDefault();
+                    .FirstOrDefault(t =>
+                        t.CanBuild &&
+                        !string.IsNullOrEmpty(t.BeeTargetName) &&
+                        t.BeeTargetName.Contains(targetInfo[1]));
+                var asmdef = validTargets.FirstOrDefault(t => t.FileNameWithoutExtension == targetInfo[0]);
 
                 if (asmdef == null || buildTarget == null)
                     throw new Exception($"Invalid target {target}");
@@ -130,41 +131,45 @@ namespace Unity.Entities.Runtime.Build
             {
                 RootAssembly = AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(relativePath.ToString()),
                 Target = buildTarget,
-                Configuration = BuildConfiguration.Debug
+                Configuration = BuildType.Debug
             };
 
-            var buildSettings = BuildSettings.CreateInstance((bs) =>
+            var config = BuildConfiguration.CreateInstance((c) =>
             {
-                bs.hideFlags = HideFlags.HideAndDontSave;
-                bs.SetComponent(profile);
-                bs.SetComponent(new OutputBuildDirectory { OutputDirectory = $"Library/DotsRuntimeBuild/build/Mole3D/{profile.BeeTargetName}" });
+                c.hideFlags = HideFlags.HideAndDontSave;
+                c.SetComponent(profile);
+                c.SetComponent(new OutputBuildDirectory { OutputDirectory = $"Library/DotsRuntimeBuild/build/Mole3D/{profile.BeeTargetName}" });
             });
 
             var convSettings = new ConversionSystemFilterSettings("Unity.Rendering.Hybrid");
-            buildSettings.SetComponent(convSettings);
+            config.SetComponent(convSettings);
 
             var sceneList = new SceneList();
             var rootScenePath = ConversionUtils.GetScenePathForSceneWithName(name);
             var scene = AssetDatabase.LoadAssetAtPath<SceneAsset>(rootScenePath);
-            sceneList.Scenes.Add(GlobalObjectId.GetGlobalObjectIdSlow(scene));
-            buildSettings.SetComponent(sceneList);
-
-            var buildPipeline = BuildPipeline.CreateInstance((pipeline) =>
+            sceneList.SceneInfos.Add(new SceneList.SceneInfo
             {
-                pipeline.hideFlags = HideFlags.HideAndDontSave;
-                pipeline.BuildSteps.Add(new BuildStepExportEntities());
-                pipeline.BuildSteps.Add(new BuildStepExportConfiguration());
-                pipeline.BuildSteps.Add(new BuildStepGenerateBeeFiles());
+                Scene = GlobalObjectId.GetGlobalObjectIdSlow(scene),
+                AutoLoad = true
+            });
+            config.SetComponent(sceneList);
+
+            var pipeline = BuildPipeline.CreateInstance((p) =>
+            {
+                p.hideFlags = HideFlags.HideAndDontSave;
+                p.BuildSteps.Add(new BuildStepExportEntities());
+                p.BuildSteps.Add(new BuildStepExportConfiguration());
+                p.BuildSteps.Add(new BuildStepGenerateBeeFiles());
                 if (runBee)
                 {
-                    pipeline.BuildSteps.Add(new BuildStepRunBee());
+                    p.BuildSteps.Add(new BuildStepRunBee());
                 };
             });
 
             // Run build pipeline
             using (var progress = new BuildProgress($"Build {profile.Target.DisplayName} {profile.Configuration}", "Building..."))
             {
-                return buildPipeline.Build(buildSettings, progress);
+                return pipeline.Build(config, progress);
             }
         }
     }

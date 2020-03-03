@@ -1,14 +1,13 @@
-using System;
 using System.IO;
 using Unity.Build;
 
 namespace Unity.Entities.Runtime.Build
 {
-    internal class DotsRuntimeRunStep : RunStep
+    internal sealed class DotsRuntimeRunStep : RunStep
     {
-        public override bool CanRun(BuildSettings settings, out string reason)
+        public override bool CanRun(BuildConfiguration config, out string reason)
         {
-            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(settings);
+            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(config);
             if (artifact == null)
             {
                 reason = $"Could not retrieve build artifact '{nameof(DotsRuntimeBuildArtifact)}'.";
@@ -27,7 +26,7 @@ namespace Unity.Entities.Runtime.Build
                 return false;
             }
 
-            if (!settings.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
+            if (!config.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
             {
                 reason = $"Could not retrieve component '{nameof(DotsRuntimeBuildProfile)}'.";
                 return false;
@@ -43,18 +42,18 @@ namespace Unity.Entities.Runtime.Build
             return true;
         }
 
-        public override RunStepResult Start(BuildSettings settings)
+        public override RunStepResult Start(BuildConfiguration config)
         {
-            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(settings);
-            var profile = settings.GetComponent<DotsRuntimeBuildProfile>();
+            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(config);
+            var profile = config.GetComponent<DotsRuntimeBuildProfile>();
 
             if (!profile.Target.Run(artifact.OutputTargetFile))
             {
-                return RunStepResult.Failure(settings, this, $"Failed to start build target {profile.Target.DisplayName} at '{artifact.OutputTargetFile.FullName}'.");
+                return RunStepResult.Failure(config, this, $"Failed to start build target {profile.Target.DisplayName} at '{artifact.OutputTargetFile.FullName}'.");
             }
 
             //@TODO: BuildTarget.Run should return the process, so we can store it in DotsRuntimeRunInstance
-            return RunStepResult.Success(settings, this, new DotsRuntimeRunInstance());
+            return RunStepResult.Success(config, this, new DotsRuntimeRunInstance());
         }
     }
 }

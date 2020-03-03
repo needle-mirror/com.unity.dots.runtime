@@ -6,13 +6,9 @@ using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(description = k_Description, category = "DOTS")]
-    internal class BuildStepRunBee : BuildStep
+    [BuildStep(Name = "Run Bee", Description = "Running Bee", Category = "DOTS")]
+    sealed class BuildStepRunBee : BuildStep
     {
-        const string k_Description = "Run bee";
-
-        public override string Description => k_Description;
-
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile)
@@ -25,7 +21,7 @@ namespace Unity.Entities.Runtime.Build
 
         public override BuildStepResult RunBuildStep(BuildContext context)
         {
-            var arguments = BuildContextInternals.GetBuildSettings(context).name;
+            var arguments = BuildContextInternals.GetBuildConfiguration(context).name;
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
             var workingDir = profile.BeeRootDirectory;
             var outputDir = new DirectoryInfo(this.GetOutputBuildDirectory(context));

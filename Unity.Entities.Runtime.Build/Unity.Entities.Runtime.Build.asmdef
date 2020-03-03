@@ -1,22 +1,25 @@
 {
     "name": "Unity.Entities.Runtime.Build",
     "references": [
-        "Unity.Build",
-        "Unity.Build.Common",
-        "Unity.Build.Internals",
         "Unity.Collections",
         "Unity.Entities",
         "Unity.Entities.Hybrid",
         "Unity.Entities.Runtime",
         "Unity.Mathematics",
         "Unity.Platforms",
+        "Unity.Build",
+        "Unity.Build.Common",
+        "Unity.Build.DotsRuntime",
+        "Unity.Build.Editor",
+        "Unity.Build.Internals",
         "Unity.Properties",
         "Unity.Properties.Editor",
         "Unity.Scenes.Editor",
         "Unity.Scenes.Hybrid",
         "Unity.Serialization",
         "Unity.Tiny.Codec",
-        "Unity.Tiny.Codec.Editor"
+        "Unity.Tiny.Codec.Editor",
+        "Unity.Dots.TestRunner.Editor"
     ],
     "includePlatforms": [
         "Editor"
@@ -34,6 +37,11 @@
             "name": "com.unity.entities",
             "expression": "(0.4.0-preview.10,)",
             "define": "USE_INCREMENTAL_CONVERSION"
+        }, 
+        {
+            "name": "com.unity.dots.testrunner",
+            "expression": "0.0",
+            "define": "DOTS_TEST_RUNNER"
         }
     ],
     "noEngineReferences": false

@@ -24,6 +24,7 @@ public class BuildProgram
 {
     public static NPath BeeRootValue;
     public static NPath LowLevelRoot => BeeRoot.Parent.Combine("LowLevelSupport~");
+    public static DotsRuntimeCSharpProgram UnityTinyBurst { get; set; }
     public static DotsRuntimeCSharpProgram UnityLowLevel { get; set; }
     public static DotsRuntimeCSharpProgram ZeroJobs { get; set; }
     public static DotNetAssembly UnityCompilationPipeline { get; set; }
@@ -97,23 +98,39 @@ public class BuildProgram
             EnforceManifest = true,
             Manifest =
             {
-                 BeeRootValue.Combine("manifest.stevedore"),
+                BeeRootValue.Combine("manifest.stevedore"),
             },
-           
         };
+
         //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
         CSharpProgram.DefaultConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release, DownloadableCsc.Csc72);
+        
+        PerConfigBuildSettings = DotsConfigs.MakeConfigs();
+        foreach (var rootAssemblyName in PerConfigBuildSettings.Keys)
+        {
+            AsmDefConfigFile.AsmDefDescriptionFor(rootAssemblyName).IsTinyRoot = true;
+        }
+
+        //any asmdef that sits next to a .project file we will consider a tiny game.
+        var asmDefDescriptions = AsmDefConfigFile.AssemblyDefinitions.ToArray();
+        var burstAsmDef = asmDefDescriptions.First(d => d.Name == "Unity.Burst");
 
         UnityLowLevel = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.LowLevel")
         {
-            References = {UnsafeUtility.DotNetAssembly},
+            References = { UnsafeUtility.DotNetAssembly },
             Unsafe = true
         };
         UnityLowLevel.NativeProgram.Libraries.Add(IsLinux, new SystemLibrary("dl"));
 
-        ZeroJobs = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.ZeroJobs")
+        UnityTinyBurst = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.Tiny.Burst")
         {
             References = { UnityLowLevel },
+            Unsafe = true
+        };
+
+        ZeroJobs = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.ZeroJobs")
+        {
+            References = { UnityLowLevel, UnityTinyBurst, GetOrMakeDotsRuntimeCSharpProgramFor(burstAsmDef) },
             Unsafe = true
         };
 
@@ -124,10 +141,7 @@ public class BuildProgram
         NUnitLite = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunitlite.dll"), Framework.Framework40);
         NUnitFramework = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunit.framework.dll"), Framework.Framework40);
 
-        //any asmdef that sits next to a .project file we will consider a tiny game.
-        var asmDefDescriptions = AsmDefConfigFile.AssemblyDefinitions.ToArray();
-
-        BurstCompiler.BurstExecutable = asmDefDescriptions.First(d => d.Name == "Unity.Burst")
+        BurstCompiler.BurstExecutable = burstAsmDef
             .Path.Parent.Parent.Combine(".Runtime/bcl.exe").QuoteForProcessStart();
 
         var ilPostProcessorPrograms = asmDefDescriptions
@@ -152,10 +166,18 @@ public class BuildProgram
                 return ret;
             })
             .ToArray();
-        PerConfigBuildSettings = DotsConfigs.MakeConfigs();
 
-        var tinyMainAsmDefs = asmDefDescriptions;//.Where(d => d.NamedReferences.Contains("Unity.Tiny.Main"));
+        var tinyMainAsmDefs = asmDefDescriptions.Where(a=>a.IsTinyRoot);
         var gameAsmDefs = tinyMainAsmDefs.Union(AsmDefConfigFile.TestableAssemblyDefinitions);
+        foreach (var gameAsmdef in gameAsmDefs)
+        {
+            var gameProgram = GetOrMakeDotsRuntimeCSharpProgramFor(gameAsmdef);
+            if (gameProgram.AsmDefDescription.NeedsEntryPointAdded())
+                gameProgram.References.Add(
+                    GetOrMakeDotsRuntimeCSharpProgramFor(
+                        AsmDefConfigFile.AsmDefDescriptionFor("Unity.Runtime.EntryPoint")));
+        }
+
         var gamePrograms = gameAsmDefs.Select(SetupGame).ExcludeNulls().ToArray();
 
         var vs = new VisualStudioSolution
@@ -228,7 +250,7 @@ public class BuildProgram
             return false; 
         if (arg.FileName.Contains("Unity.Build.Tests"))
             return false;
-        if (arg.FileName.Contains("Unity.Build.Common.Tests"))
+        if (arg.FileName.Contains("Unity.Build.Tests"))
             return false;
         if (arg.FileName.Contains("Unity.Authoring"))
             return false;
@@ -247,6 +269,8 @@ public class BuildProgram
         if (arg.FileName.Contains("Unity.Collections.Tests"))
             return false;
         if (arg.FileName.Contains("Automation.Tests"))
+            return false;
+        if (arg.FileName.Contains("Unity.PerformanceTesting"))
             return false;
         if (arg.FileName.Contains(".CodeGen"))
             return false;
@@ -291,39 +315,51 @@ public class BuildProgram
     private static DotsRuntimeCSharpProgram SetupGame(AsmDefDescription game)
     {
         var gameProgram = GetOrMakeDotsRuntimeCSharpProgramFor(game);
-
-        var withoutExt = new NPath(gameProgram.FileName).FileNameWithoutExtension;
-        NPath exportManifest = new NPath(withoutExt + "/export.manifest");
-        Backend.Current.RegisterFileInfluencingGraph(exportManifest);
-        if (exportManifest.FileExists())
-        {
-            var dataFiles = exportManifest.MakeAbsolute().ReadAllLines();
-            foreach (var dataFile in dataFiles.Select(d=>new NPath(d)))
-                gameProgram.SupportFiles.Add(new DeployableFile(dataFile, "Data/"+dataFile.FileName));
-        }
-        
         var configToSetupGame = new Dictionary<DotsRuntimeCSharpProgramConfiguration, DotNetAssembly>();
 
         if (!PerConfigBuildSettings.ContainsKey(game.Name)) return null;
-        
-        foreach (var config in PerConfigBuildSettings[game.Name].Where(config => !CanSkipSetupOf(game.Name, config)))
+
+        var configsToUse = PerConfigBuildSettings[game.Name].Where(config => !CanSkipSetupOf(game.Name, config));
+        foreach (var config in configsToUse)
         {
-            gameProgram.ProjectFile.StartInfo.Add(c => c == config,
+            var withoutExt =
+                new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier);
+            NPath exportManifest = withoutExt.Combine("export.manifest");
+            Backend.Current.RegisterFileInfluencingGraph(exportManifest);
+            if (exportManifest.FileExists())
+            {
+                var dataFiles = exportManifest.MakeAbsolute().ReadAllLines();
+                foreach (var dataFile in dataFiles.Select(d => new NPath(d)))
+                    gameProgram.SupportFiles.Add(
+                        c => c.Equals(config),
+                        new DeployableFile(dataFile, "Data/" + dataFile.FileName));
+            }
+
+            gameProgram.ProjectFile.StartInfo.Add(
+                c => c == config,
                 StartInfoFor(config, EntryPointExecutableFor(gameProgram, config)));
-            gameProgram.ProjectFile.BuildCommand.Add(c => c == config,
+            gameProgram.ProjectFile.BuildCommand.Add(
+                c => c == config,
                 new BeeBuildCommand(GameDeployBinaryFor(gameProgram, config).ToString(), false, false).ToExecuteArgs());
+        }
 
-            
-            DotNetAssembly setupGame = gameProgram.SetupSpecificConfiguration(config).WithDeployables(new DotNetAssembly(
-                Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"),
-                Framework.FrameworkNone));
+        foreach (var config in configsToUse)
+        {
+            DotNetAssembly setupGame = gameProgram.SetupSpecificConfiguration(config)
+                .WithDeployables(
+                    new DotNetAssembly(
+                        Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"),
+                        Framework.FrameworkNone));
 
-            var postILProcessedGame = ILPostProcessorTool.SetupInvocation(setupGame, config, gameProgram.Defines.For(config).ToArray());
+            var postILProcessedGame = ILPostProcessorTool.SetupInvocation(
+                setupGame,
+                config,
+                gameProgram.Defines.For(config).ToArray());
             var postTypeRegGenGame = TypeRegistrationTool.SetupInvocation(postILProcessedGame, config);
             configToSetupGame[config] = postTypeRegGenGame;
-        };
+        }
 
-        var il2CppOutputProgram = new Il2Cpp.Il2CppOutputProgram(gameProgram.AsmDefDescription.Name.Replace(".","-") + ".il2cpp");
+        var il2CppOutputProgram = new Il2Cpp.Il2CppOutputProgram(gameProgram.AsmDefDescription.Name);
         
         var configToSetupGameBursted = new Dictionary<DotsRuntimeCSharpProgramConfiguration, DotNetAssembly>();
 
@@ -332,13 +368,13 @@ public class BuildProgram
         {
             hostBurstCompiler = new BurstCompilerForWindows64();
             hostBurstCompiler.Link = true;
-            hostBurstCompiler.OnlyStaticMethods = true;
+            hostBurstCompiler.OnlyStaticMethods = false;
         }
         else if (HostPlatform.IsOSX)
         {
             hostBurstCompiler = new BurstCompilerForMac();
             hostBurstCompiler.Link = true;
-            hostBurstCompiler.OnlyStaticMethods = true;
+            hostBurstCompiler.OnlyStaticMethods = false;
         }
         else
             Console.WriteLine("Tiny burst not yet supported on linux.");
@@ -423,11 +459,12 @@ public class BuildProgram
 
                 if (builtNativeProgram is IPackagedAppExtension)
                 {
-                    (builtNativeProgram as IPackagedAppExtension).SetAppPackagingParameters(gameProgram.AsmDefDescription.Name, config.NativeProgramConfiguration.CodeGen, gameProgram.SupportFiles.For(config));
+                    (builtNativeProgram as IPackagedAppExtension).SetAppPackagingParameters(gameProgram.AsmDefDescription.Name, config.NativeProgramConfiguration.CodeGen, gameProgram.SupportFiles.For(config).Concat(
+                        il2CppOutputProgram.SupportFiles.For(config.NativeProgramConfiguration)));
                 }
                 deployedGame = builtNativeProgram.DeployTo(deployPath);
                 entryPointExecutable = deployedGame.Path;
-                if (config.EnableManagedDebugging)
+                if (config.EnableManagedDebugging && !(builtNativeProgram is IPackagedAppExtension))
                     Backend.Current.AddDependency(deployedGame.Path, Il2Cpp.CopyIL2CPPMetadataFile(deployPath, setupGame));
             }
             else
@@ -483,9 +520,12 @@ public class BuildProgram
 
     private static NPath GameDeployBinaryFor(AsmDefCSharpProgram game, DotsRuntimeCSharpProgramConfiguration config)
     {
+        var ext = config.NativeProgramConfiguration.ExecutableFormat.Extension;
+        if (!ext.StartsWith(".") && !String.IsNullOrEmpty(ext))
+            ext = "." + ext;
         var fileName = config.ScriptingBackend == ScriptingBackend.Dotnet ? 
             game.FileName
-            : new NPath(game.AsmDefDescription.Name.Replace(".","-")).ChangeExtension(config.NativeProgramConfiguration.ExecutableFormat.Extension);
+            : new NPath(game.AsmDefDescription.Name) + ext;
         
         return GameDeployDirectoryFor(game, config).Combine(fileName);
     }
@@ -508,7 +548,8 @@ public class BuildProgram
 
     static readonly Cache<AsmDefCSharpProgram, AsmDefDescription> _cache = new Cache<AsmDefCSharpProgram, AsmDefDescription>();
 
-    public static AsmDefCSharpProgram GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefDescription asmDefDescription) =>
+    public static AsmDefCSharpProgram GetOrMakeDotsRuntimeCSharpProgramFor(
+        AsmDefDescription asmDefDescription) =>
         _cache.GetOrMake(asmDefDescription, () => new AsmDefCSharpProgram(asmDefDescription));
 
 }

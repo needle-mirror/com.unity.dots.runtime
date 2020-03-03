@@ -39,15 +39,14 @@ namespace Unity.Collections.LowLevel.Unsafe
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_freetemp")]
         public static extern unsafe void FreeTempMemory();
 
-        // TODO This will be deleted and deprecated with the changes that allow NativeJobs to run in single-threaded mode.
+        // The CallFunctionPtr_abc methods are used to call static code-gen methods.
+        // If we remove the minimal path for ST, these could be removed.
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_call_p")]
         public static extern unsafe void CallFunctionPtr_p(void* fnc, void* data);
 
-        // TODO This will be deleted and deprecated with the changes that allow NativeJobs to run in single-threaded mode.
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_call_pp")]
         public static extern unsafe void CallFunctionPtr_pp(void* fnc, void* data1, void* data2);
 
-        // TODO This will be deleted and deprecated with the changes that allow NativeJobs to run in single-threaded mode.
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_call_pi")]
         public static extern unsafe void CallFunctionPtr_pi(void* fnc, void* data, int param0);
 
@@ -61,7 +60,16 @@ namespace Unity.Collections.LowLevel.Unsafe
         // This could work in MT, but the tracking needs to be implemented with a mutex.
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_get_heap_size")]
         internal static extern long GetHeapSize(Allocator allocator);
+
 #endif
+        // We need a shared pointer with Burst; however, lowlevel doesn't have access to Burst to
+        // use the typical machinery. Until (if?) that is solved, we need a workaround to pass
+        // a static flag to bursted code.
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_get_in_job")]
+        internal static extern int GetInJob();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_set_in_job")]
+        internal static extern void SetInJob(int inJob);
 
         public static bool IsValidAllocator(Allocator allocator) { return allocator > Allocator.None; }
     }

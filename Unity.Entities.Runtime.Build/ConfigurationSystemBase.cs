@@ -12,9 +12,9 @@ namespace Unity.Entities.Runtime.Build
     /// <summary>
     /// Base class for a configuration system. A configuration system must inherit from ConfigurationSystemBase to be in the ConfigurationSystemGroup group
     /// </summary>
-    public abstract partial class ConfigurationSystemBase : ComponentSystem
+    public abstract partial class ConfigurationSystemBase : SystemBase
     {
         public Scene projectScene;
-        public BuildSettings buildSettings;
+        public BuildConfiguration buildConfiguration;
     }
 }

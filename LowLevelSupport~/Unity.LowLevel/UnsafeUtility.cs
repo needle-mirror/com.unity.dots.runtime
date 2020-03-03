@@ -107,7 +107,7 @@ namespace Unity.Collections.LowLevel.Unsafe
             return PinSystemArrayAndGetAddress(target, out gcHandle);
         }
 
-        public static unsafe int MemoryCompare(void* left, void* right, int size)
+        public static unsafe int MemoryCompare(void* left, void* right, long size)
         {
             byte* bl = (byte*) left;
             byte* br = (byte*) right;

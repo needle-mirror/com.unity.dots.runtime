@@ -17,15 +17,19 @@ void memfail();
 
 #ifdef GUARD_HEAP
 
+#define GUARD_PAD 32
+
+static_assert(GUARD_PAD > sizeof(int64_t) * 2, "Guard pad needs to be bigger.");
+
 struct GuardHeader {
+    // Where the constant for the pad can be any 2^n greater than the size of 2 int64_t
+    static const int PAD = GUARD_PAD - 2 * sizeof(int64_t);
+    static const int HEAD_SENTINEL = 0xa1;
+    static const int TAIL_SENTINEL = 0xb1;
+
     int64_t size;
     int64_t offset;
-};
-
-struct GuardFooter {
-    static const int PAD = 8;
-    uint8_t front[PAD];
-    uint8_t back[PAD];
+    uint8_t pad[PAD];
 };
 
 // Pointer to the memory that will be returned; setting up the padding

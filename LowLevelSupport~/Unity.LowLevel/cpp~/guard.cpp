@@ -35,25 +35,24 @@ void setupGuardedMemory(void* mem, int headerSize, int64_t size)
     GuardHeader* head = (GuardHeader*)(user - sizeof(GuardHeader));
     head->size = size;
     head->offset = headerSize;
+    memset(head->pad, GuardHeader::HEAD_SENTINEL, GuardHeader::PAD);
 
     // Setup buffer
     memset(mem, 0xbc, size);
 
     // Setup tail
-    GuardFooter *tail = (GuardFooter*)(user + size);
-    memset(tail->front, 0xa1, sizeof(tail->front));
-    memset(tail->back, 0xa2, sizeof(tail->back));
+    uint8_t *tail = user + size;
+    memset(tail, GuardHeader::TAIL_SENTINEL, GUARD_PAD);
 }
 
 void checkGuardedMemory(void* mem, bool poison)
 {
     uint8_t* user = (uint8_t*)mem;
     GuardHeader* head = (GuardHeader*)(user - sizeof(GuardHeader));
+    uint8_t* tail = user + head->size;
 
-    GuardFooter* tail = (GuardFooter*)(user + head->size);
-
-    guardcheck(tail->front, 0xa1, sizeof(tail->front));
-    guardcheck(tail->back, 0xa2, sizeof(tail->back));
+    guardcheck(head->pad, GuardHeader::HEAD_SENTINEL, GuardHeader::PAD);
+    guardcheck(tail, GuardHeader::TAIL_SENTINEL, GUARD_PAD);
 
     if (poison)
         memset(mem, GUARD_HEAP_POISON, (size_t)(head->size));

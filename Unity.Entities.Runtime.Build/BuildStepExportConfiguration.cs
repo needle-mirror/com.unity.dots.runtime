@@ -7,13 +7,9 @@ using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(description = kDescription, category = "DOTS")]
-    internal class BuildStepExportConfiguration : BuildStep
+    [BuildStep(Name = "Export Configuration", Description = "Exporting Configuration", Category = "DOTS")]
+    sealed class BuildStepExportConfiguration : BuildStep
     {
-        const string kDescription = "Export Configuration";
-
-        public override string Description => kDescription;
-
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile),
@@ -82,7 +78,7 @@ namespace Unity.Entities.Runtime.Build
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
             var scenes = GetRequiredComponent<SceneList>(context);
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
-            var buildSettings = BuildContextInternals.GetBuildSettings(context);
+            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
 
             using (var loadedSceneScope = new LoadedSceneScope(firstScene))
             {
@@ -99,14 +95,17 @@ namespace Unity.Entities.Runtime.Build
                     {
                         ConfigurationSystemBase baseSys = (ConfigurationSystemBase)tmpWorld.GetOrCreateSystem(type);
                         baseSys.projectScene = projectScene;
-                        baseSys.buildSettings = buildSettings;
+                        baseSys.buildConfiguration = buildConfiguration;
                         configSystemGroup.AddSystemToUpdateList(baseSys);
                     }
                     configSystemGroup.SortSystemUpdateList();
                     configSystemGroup.Update();
 
                     // Export configuration scene
-                    var outputFile = profile.DataDirectory.GetFile(tmpWorld.Name);
+                    var config = BuildContextInternals.GetBuildConfiguration(context);
+                    var outputFile = profile.StagingDirectory.Combine(config.name)
+                        .Combine("Data")
+                        .GetFile(tmpWorld.Name);
                     context.GetOrCreateValue<WorldExportTypeTracker>()?.AddTypesFromWorld(tmpWorld);
                     WorldExport.WriteWorldToFile(tmpWorld, outputFile);
 

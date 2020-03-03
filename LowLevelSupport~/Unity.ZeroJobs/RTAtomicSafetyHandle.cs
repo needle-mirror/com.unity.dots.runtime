@@ -132,7 +132,11 @@ namespace Unity.Collections.LowLevel.Unsafe
     [StructLayout(LayoutKind.Sequential)]
     public struct AtomicSafetyHandle
     {
+#if UNITY_WINDOWS
         const string nativejobslib = "nativejobs";
+#else
+        const string nativejobslib = "libnativejobs";
+#endif
         [DllImport(nativejobslib, EntryPoint= "AtomicStack_Push")]
         private static extern unsafe void PushAtomicNode(void* node);
 
@@ -366,6 +370,8 @@ namespace Unity.Collections.LowLevel.Unsafe
             {
                 if (handle.nodePtr == null)
                     return;
+                if (handle.nodeLocalPtr != null)
+                    throw new Exception("Code-gen created a duplicate PatchLocal. This is bug.");
 
                 handle.nodeLocalPtr = (AtomicSafetyNodePatched*)UnsafeUtility.Malloc(sizeof(AtomicSafetyNodePatched), 16, Allocator.TempJob);
                 *handle.nodeLocalPtr = *(AtomicSafetyNodePatched *)handle.nodePtr;
@@ -389,12 +395,16 @@ namespace Unity.Collections.LowLevel.Unsafe
 
             unsafe
             {
+                if (handle.version == -1)
+                    throw new Exception("Code-gen created a duplicate UnpatchLocal. This is bug.");
+
                 if (handle.nodeLocalPtr == null)
                     return;
 
                 UnsafeUtility.Free(handle.nodeLocalPtr, Allocator.TempJob);
                 handle.nodeLocalPtr = null;
                 handle.nodePtr = null;
+                handle.version = -1;
             }
         }
 
@@ -707,8 +717,6 @@ namespace Unity.Collections.LowLevel.Unsafe
 
     public unsafe struct JobReflectionData
     {
-        // @@TODO Need code IL post processing
-        char* jobName;  // provided in post processing since we don't need multiple copies of job names (reflection replacement)
     }
 }
 

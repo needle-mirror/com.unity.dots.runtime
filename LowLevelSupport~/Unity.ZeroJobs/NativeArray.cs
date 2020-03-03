@@ -5,9 +5,9 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Unity.Burst;
+using Unity.Jobs;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.Internal;
-using Unity.Jobs;
 
 namespace Unity.Collections
 {
@@ -126,7 +126,7 @@ namespace Unity.Collections
             if (!IsUnmanagedData<T>())
             {
                 throw new InvalidOperationException(
-                    $"{typeof(T)} used in NativeArray<{typeof(T)}> must be unmanaged (contain no managed types).");
+                    $"{typeof(T)} used in NativeArray<{typeof(T)}> must be unmanaged (contain no managed types) and cannot itself be a native container type.");
             }
         }
 
@@ -181,9 +181,9 @@ namespace Unity.Collections
 #pragma warning disable 649
         unsafe struct NativeListData
         {
-            public void*                            buffer;
-            public int								length;
-            public int								capacity;
+            public void* buffer;
+            public int   length;
+            public int   capacity;
         }
 #pragma warning restore 649
 
@@ -219,7 +219,16 @@ namespace Unity.Collections
 
             DisposeSentinel.Dispose(ref m_Safety, ref m_DisposeSentinel);
 #endif
-            Deallocate();
+            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
+            m_Buffer = null;
+            m_Length = 0;
+        }
+
+        void Deallocate()
+        {
+            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
+            m_Buffer = null;
+            m_Length = 0;
         }
 
         /// <summary>
@@ -241,34 +250,17 @@ namespace Unity.Collections
             // AtomicSafetyHandle can be destroyed after the job was scheduled (Job scheduling
             // will check that no jobs are writing to the container).
             DisposeSentinel.Clear(ref m_DisposeSentinel);
-#endif
-            var jobHandle = new DisposeJob { Container = this }.Schedule(inputDeps);
 
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety } }.Schedule(inputDeps);
+
             AtomicSafetyHandle.Release(m_Safety);
+#else
+            var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel } }.Schedule(inputDeps);
 #endif
             m_Buffer = null;
             m_Length = 0;
 
             return jobHandle;
-        }
-
-        // [BurstCompile] - can't use attribute since it's inside com.untity.collections.
-        struct DisposeJob : IJob
-        {
-            public NativeArray<T> Container;
-
-            public void Execute()
-            {
-                Container.Deallocate();
-            }
-        }
-
-        void Deallocate()
-        {
-            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
-            m_Buffer = null;
-            m_Length = 0;
         }
 
         [WriteAccessRequired]
@@ -541,6 +533,221 @@ namespace Unity.Collections
 
             handle.Free();
         }
+
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        private void CheckReinterpretLoadRange<U>(int sourceIndex) where U : struct
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            int tsize = UnsafeUtility.SizeOf<T>();
+            AtomicSafetyHandle.CheckReadAndThrow(m_Safety);
+
+            int usize = UnsafeUtility.SizeOf<U>();
+            long byteSize = Length * tsize;
+
+            long firstByte = sourceIndex * tsize;
+            long lastByte = firstByte + usize;
+
+            if (firstByte < 0 || lastByte > byteSize)
+                throw new ArgumentOutOfRangeException(nameof(sourceIndex), "loaded byte range must fall inside container bounds");
+#endif
+        }
+
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        private void CheckReinterpretStoreRange<U>(int destIndex) where U : struct
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            int tsize = UnsafeUtility.SizeOf<T>();
+            AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+
+            int usize = UnsafeUtility.SizeOf<U>();
+            long byteSize = Length * tsize;
+
+            long firstByte = destIndex * tsize;
+            long lastByte = firstByte + usize;
+
+            if (firstByte < 0 || lastByte > byteSize)
+                throw new ArgumentOutOfRangeException(nameof(destIndex), "stored byte range must fall inside container bounds");
+#endif
+        }
+
+        public U ReinterpretLoad<U>(int sourceIndex) where U : struct
+        {
+            CheckReinterpretLoadRange<U>(sourceIndex);
+            byte* src_ptr = ((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * sourceIndex;
+            return UnsafeUtility.ReadArrayElement<U>(src_ptr, 0);
+        }
+
+        public void ReinterpretStore<U>(int destIndex, U data) where U : struct
+        {
+            CheckReinterpretStoreRange<U>(destIndex);
+            byte* dst_ptr = ((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * destIndex;
+            UnsafeUtility.WriteArrayElement<U>(dst_ptr, 0, data);
+        }
+
+        private NativeArray<U> InternalReinterpret<U>(int length) where U : struct
+        {
+            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<U>(Buffer, length, m_AllocatorLabel);
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref result, m_Safety);
+            SetDisposeSentinel(ref result);
+#endif
+            return result;
+        }
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+        // DisposeSentinel is a class so that's not supported in Burst. However, in Burst it's guaranteed
+        // that the sentinel is null anyway, so we can just use BurstDiscard on the place that works on it.
+        [BurstDiscard]
+        void SetDisposeSentinel<U>(ref NativeArray<U> result) where U : struct
+        {
+            result.m_DisposeSentinel = m_DisposeSentinel;
+        }
+
+#endif
+
+        public NativeArray<U> Reinterpret<U>() where U : struct
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            if (UnsafeUtility.SizeOf<T>() != UnsafeUtility.SizeOf<U>())
+            {
+                throw new InvalidOperationException($"Types {typeof(T)} and {typeof(U)} are different sizes - direct reinterpretation is not possible. If this is what you intended, use Reinterpret(<type size>)");
+            }
+#endif
+            return InternalReinterpret<U>(Length);
+        }
+
+        public NativeArray<U> Reinterpret<U>(int expectedTypeSize) where U : struct
+        {
+            var tSize = UnsafeUtility.SizeOf<T>();
+            var uSize = UnsafeUtility.SizeOf<U>();
+
+            var byteLen = ((long)Length) * tSize;
+            var uLen = byteLen / uSize;
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            if (tSize != expectedTypeSize)
+            {
+                throw new InvalidOperationException($"Type {typeof(T)} was expected to be {expectedTypeSize} but is {tSize} bytes");
+            }
+
+            if (uLen * uSize != byteLen)
+            {
+                throw new InvalidOperationException($"Types {typeof(T)} (array length {Length}) and {typeof(U)} cannot be aliased due to size constraints. The size of the types and lengths involved must line up.");
+            }
+#endif
+            return InternalReinterpret<U>((int)uLen);
+        }
+
+        public NativeArray<T> GetSubArray(int start, int length)
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            if (start < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(start), "start must be >= 0");
+            }
+
+            if (start + length > Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length), $"sub array range {start}-{start+length-1} is outside the range of the native array 0-{Length-1}");
+            }
+#endif
+            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<T>(((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * start, length, Allocator.Invalid);
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref result, m_Safety);
+            result.m_DisposeSentinel = null;
+#endif
+            return result;
+        }
+
+        public ReadOnly AsReadOnly()
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            return new ReadOnly(Buffer, m_Length, ref m_Safety);
+#else
+            return new ReadOnly(Buffer, m_Length);
+#endif
+        }
+
+        [NativeContainer]
+        [NativeContainerIsReadOnly]
+        public unsafe struct ReadOnly
+        {
+            [NativeDisableUnsafePtrRestriction]
+            internal void* m_Buffer;
+            internal int   m_Length;
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            internal AtomicSafetyHandle m_Safety;
+
+            internal ReadOnly(void* buffer, int length, ref AtomicSafetyHandle safety)
+            {
+                m_Buffer = buffer;
+                m_Length = length;
+                m_Safety = safety;
+            }
+#else
+            internal ReadOnly(void* buffer, int length)
+            {
+                m_Buffer = buffer;
+                m_Length = length;
+            }
+#endif
+
+            public T this[int index]
+            {
+                get
+                {
+                    CheckElementReadAccess(index);
+                    return UnsafeUtility.ReadArrayElement<T>(m_Buffer, index);
+                }
+            }
+
+            [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+            void CheckElementReadAccess(int index)
+            {
+                if (index < 0
+                &&  index >= m_Length)
+                {
+                    throw new IndexOutOfRangeException($"Index {index} is out of range (must be between 0 and {m_Length-1}).");
+                }
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+//                int version = m_Safety.UncheckedGetNodeVersion();
+//                if (m_Safety.version != (version & AtomicSafetyHandle.ReadCheck))
+//                    AtomicSafetyHandle.CheckReadAndThrowNoEarlyOut(m_Safety);
+#endif
+            }
+        }
+    }
+
+    [NativeContainer]
+    internal unsafe struct NativeArrayDispose
+    {
+        [NativeDisableUnsafePtrRestriction]
+        internal void*     m_Buffer;
+        internal Allocator m_AllocatorLabel;
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+        internal AtomicSafetyHandle m_Safety;
+#endif
+
+        public void Dispose()
+        {
+            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
+        }
+    }
+
+    // [BurstCompile] - can't use attribute since it's inside com.unity.collections.
+    internal struct NativeArrayDisposeJob : IJob
+    {
+        internal NativeArrayDispose Data;
+
+        public void Execute()
+        {
+            Data.Dispose();
+        }
     }
 
     /// <summary>
@@ -558,6 +765,7 @@ namespace Unity.Collections
         public T[] Items => m_Array.ToArray();
     }
 }
+
 namespace Unity.Collections.LowLevel.Unsafe
 {
     public static class NativeArrayUnsafeUtility

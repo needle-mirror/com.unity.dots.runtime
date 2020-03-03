@@ -4,9 +4,9 @@ using Unity.Properties;
 
 namespace Unity.Entities.Runtime.Build
 {
-    public class DotsRuntimeScriptingDefines : IBuildSettingsComponent
+    internal sealed class DotsRuntimeScriptingDefines : IBuildComponent
     {
-        [Property] 
+        [Property]
         public List<string> ScriptingDefines { get; set; } = new List<string>();
     }
 }

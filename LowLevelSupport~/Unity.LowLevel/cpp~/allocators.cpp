@@ -66,20 +66,11 @@ void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignOf, Allocator alloc
 #ifdef GUARD_HEAP
     heapUsage[(int)allocatorType] += size;
 
-    // Will need up to alignOf size extra at the head to make sure actual returned pointer is aligned to alignOf
-    // Will need at least 16 bytes for offset + size due to size is int64_t
-
-    // - Aligned base pointer
-    // -   [padding]
-    // -   <8 bytes> user buffer size
-    // -   <8 bytes> offset from aligned user pointer to aligned base pointer
-    // - Aligned user pointer
-    // -   <'size' bytes> allocated buffer
-    // - Unaligned "GuardHeader"
-    // -   <16 bytes> expected values to compare
-
-    int headerSize = alignOf < 16 ? 16 : alignOf;
-    int64_t paddedSize = headerSize + size + sizeof(GuardHeader);
+    int headerSize = alignOf < sizeof(GuardHeader) ? sizeof(GuardHeader) : alignOf;
+    int64_t paddedSize = 
+        headerSize +                            // Size for the header, or alignOf, whichever is greater.
+        size +                                  // Size of user request
+        GUARD_PAD;                              // Size of tail buffer (in bytes - no need to align)
 #else
     int headerSize = 0;
     int64_t paddedSize = size;
@@ -144,7 +135,7 @@ void CALLEXPORT unsafeutility_free(void* ptr, Allocator allocatorType)
 
 #ifdef GUARD_HEAP
     GuardHeader* head = (GuardHeader*)((uint8_t*)ptr - sizeof(GuardHeader));
-    void* realPtr = (void*)((uint8_t*)ptr - head->offset);
+    GuardHeader* realPtr = (GuardHeader*)((uint8_t*)ptr - head->offset);
     heapUsage[(int)allocatorType] -= head->size;
 #else
     void* realPtr = ptr;
@@ -273,6 +264,20 @@ void CALLEXPORT unsafeutility_call_pi(void* f, void* data, int i)
     MEM_ASSERT(f);
     Call_pi func = (Call_pi)f;
     func(data, i);
+}
+
+int inJob = 0;
+
+DOEXPORT
+int CALLEXPORT unsafeutility_get_in_job()
+{
+    return inJob;
+}
+
+DOEXPORT
+void CALLEXPORT unsafeutility_set_in_job(int v)
+{
+    inJob = v;
 }
 
 } // extern "C"

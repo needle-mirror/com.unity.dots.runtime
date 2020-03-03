@@ -6,7 +6,6 @@ using Unity.Build.Internals;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Analytics;
-using BuildPipeline = Unity.Build.BuildPipeline;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -130,7 +129,7 @@ namespace Unity.Entities.Runtime.Build
             if (result == null)
                 return ci;
 
-            if (!result.BuildSettings.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
+            if (!result.BuildConfiguration.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
                 return ci;
 
             ci.configuration = profile.Configuration.ToString();
@@ -143,7 +142,7 @@ namespace Unity.Entities.Runtime.Build
             if (result == null)
                 return default;
 
-            if (!result.BuildSettings.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
+            if (!result.BuildConfiguration.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
                 return default;
 
             var unityAssembliesInProject = new List<string>();
@@ -238,7 +237,7 @@ namespace Unity.Entities.Runtime.Build
 
         internal static void SendBuildEvent(BuildPipelineResult result)
         {
-            if (!result.BuildSettings.HasComponent<DotsRuntimeBuildProfile>())
+            if (!result.BuildConfiguration.HasComponent<DotsRuntimeBuildProfile>())
                 return;
 
             var e = new BuildAnalyticsTypes.BuildEvent()

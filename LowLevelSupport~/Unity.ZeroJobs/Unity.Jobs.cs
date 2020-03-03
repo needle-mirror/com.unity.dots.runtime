@@ -9,7 +9,7 @@ using UnityEngine.Assertions;
 namespace Unity.Jobs
 {
     // Used by code gen. Do not remove.
-    internal interface IJobBase
+    public interface IJobBase
     {
         // Generated functions from code gen.
         // Called at the Schedule to set up safety handles.
@@ -22,8 +22,11 @@ namespace Unity.Jobs
         JobsUtility.ManagedJobForEachDelegate GetExecuteMethod_Gen();
         // Retrieves the UnmanagedJobSize
         int GetUnmanagedJobSize_Gen();
-        // Retrieves the job's Marshal method.
-        JobsUtility.ManagedJobMarshalDelegate GetMarshalMethod_Gen();
+        // Retrieves the job's Marshal methods.
+        JobsUtility.ManagedJobMarshalDelegate GetMarshalToBurstMethod_Gen();
+        JobsUtility.ManagedJobMarshalDelegate GetMarshalFromBurstMethod_Gen();
+        // If burst successfully compiled this job, this will return 1
+        int IsBursted_Gen();
     }
 
     internal class MonoPInvokeCallbackAttribute : Attribute
@@ -64,7 +67,7 @@ namespace Unity.Jobs
 #if UNITY_SINGLETHREADED_JOBS
             get => true;
 #else
-            get => JobsUtility.IsCompleted(JobsUtility.BatchScheduler, ref this);
+            get => JobsUtility.IsCompleted(JobsUtility.BatchScheduler, ref this) > 0;
 #endif
         }
 
@@ -106,7 +109,7 @@ namespace Unity.Jobs
         }
     }
 
-    [JobProducerType(typeof(IJobExtensions.JobStruct<>))]
+    [JobProducerType(typeof(IJobExtensions.JobProducer<>))]
     public interface IJob
     {
         void Execute();
@@ -114,43 +117,43 @@ namespace Unity.Jobs
 
     public static class IJobExtensions
     {
-        internal struct JobStruct<T> where T : struct, IJob
+        internal struct JobProducer<T> where T : struct, IJob
         {
-            static IntPtr JobReflectionData;
+            static IntPtr s_JobReflectionData;
             internal T JobData;
 
             public static IntPtr Initialize()
             {
-                if (JobReflectionData == IntPtr.Zero)
+                if (s_JobReflectionData == IntPtr.Zero)
                 {
-                    JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(JobStruct<T>), typeof(T),
+                    s_JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(JobProducer<T>), typeof(T),
                         JobType.Single,
                         (ExecuteJobFunction)Execute);
                 }
-                return JobReflectionData;
+                return s_JobReflectionData;
             }
 
-            public delegate void ExecuteJobFunction(ref JobStruct<T> jobStruct, IntPtr additionalData,
+            public delegate void ExecuteJobFunction(ref JobProducer<T> jobProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex);
 
-            public static void Execute(ref JobStruct<T> jobStruct, IntPtr additionalData,
+            public static void Execute(ref JobProducer<T> jobProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex)
             {
-                jobStruct.JobData.Execute();
+                jobProducer.JobData.Execute();
             }
         }
 
         public static unsafe JobHandle Schedule<T>(this T jobData, JobHandle dependsOn = default(JobHandle))
             where T : struct, IJob
         {
-            var jobStruct = new JobStruct<T>()
+            var jobProducer = new JobProducer<T>()
             {
                 JobData = jobData
             };
 
             var scheduleParams = new JobsUtility.JobScheduleParameters(
-                UnsafeUtility.AddressOf(ref jobStruct),
-                JobStruct<T>.Initialize(),
+                UnsafeUtility.AddressOf(ref jobProducer),
+                JobProducer<T>.Initialize(),
                 dependsOn,
                 ScheduleMode.Batched);
             return JobsUtility.Schedule(ref scheduleParams);
@@ -164,7 +167,7 @@ namespace Unity.Jobs
         }
     }
 
-    [JobProducerType(typeof(IJobParallelForExtensions.ParallelForJobStruct<>))]
+    [JobProducerType(typeof(IJobParallelForExtensions.JobParallelForProducer<>))]
     public interface IJobParallelFor
     {
         void Execute(int index);
@@ -172,33 +175,33 @@ namespace Unity.Jobs
 
     public static class IJobParallelForExtensions
     {
-        internal struct ParallelForJobStruct<T> where T : struct, IJobParallelFor
+        internal struct JobParallelForProducer<T> where T : struct, IJobParallelFor
         {
-            static IntPtr JobReflectionData;
+            static IntPtr s_JobReflectionData;
             public T JobData;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             public int Sentinel;
 #endif
 
-            public static unsafe IntPtr Initialize()
+            public static IntPtr Initialize()
             {
-                if (JobReflectionData == IntPtr.Zero)
+                if (s_JobReflectionData == IntPtr.Zero)
                 {
-                    JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(ParallelForJobStruct<T>), typeof(T),
+                    s_JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(void), typeof(void),
                         JobType.ParallelFor,
                         (ExecuteJobFunction) Execute);
                 }
-                return JobReflectionData;
+                return s_JobReflectionData;
             }
 
-            public delegate void ExecuteJobFunction(ref ParallelForJobStruct<T> jobData, IntPtr additionalData,
+            public delegate void ExecuteJobFunction(ref JobParallelForProducer<T> jobParallelForProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex);
 
-            public static void Execute(ref ParallelForJobStruct<T> jobStruct, IntPtr additionalData,
+            public static void Execute(ref JobParallelForProducer<T> jobParallelForProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex)
             {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-                Assert.AreEqual(jobStruct.Sentinel - ranges.ArrayLength, 37);
+                Assert.AreEqual(jobParallelForProducer.Sentinel - ranges.ArrayLength, 37);
 #endif
                 // TODO Tiny doesn't currently support work stealing. https://unity3d.atlassian.net/browse/DOTSR-286
 
@@ -213,7 +216,7 @@ namespace Unity.Jobs
 #endif
                     for (var i = begin; i < end; ++i)
                     {
-                        jobStruct.JobData.Execute(i);
+                        jobParallelForProducer.JobData.Execute(i);
                     }
                 }
             }
@@ -222,7 +225,7 @@ namespace Unity.Jobs
         public static unsafe JobHandle Schedule<T>(this T jobData, int arrayLength, int innerloopBatchCount, JobHandle dependsOn = default(JobHandle))
             where T : struct, IJobParallelFor
         {
-            var jobStruct = new ParallelForJobStruct<T>()
+            var parallelForJobProducer = new JobParallelForProducer<T>()
             {
                 JobData = jobData,
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
@@ -230,8 +233,8 @@ namespace Unity.Jobs
 #endif
             };
 
-            var scheduleParams = new JobsUtility.JobScheduleParameters(UnsafeUtility.AddressOf(ref jobStruct),
-                ParallelForJobStruct<T>.Initialize(),
+            var scheduleParams = new JobsUtility.JobScheduleParameters(UnsafeUtility.AddressOf(ref parallelForJobProducer),
+                JobParallelForProducer<T>.Initialize(),
                 dependsOn,
                 ScheduleMode.Batched);
             return JobsUtility.ScheduleParallelFor(ref scheduleParams, arrayLength, innerloopBatchCount);

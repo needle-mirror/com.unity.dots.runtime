@@ -25,6 +25,11 @@ public static class NativeJobsPrebuiltLibrary
     
     public static string BaselibArchitectureName(NativeProgramConfiguration npc)
     {
+        // We need to detect which emscripten backend to use on web builds, but it is only available if the 
+        // com.unity.platforms.web package is in the project manifest. Otherwise, we just default to false
+        // as it is irrelevant.
+        var tinyEmType = Type.GetType("TinyEmscripten");
+        bool useWasmBackend = (bool)(tinyEmType?.GetProperty("UseWasmBackend")?.GetValue(tinyEmType) ?? false);
         switch (npc.Platform)
         {
             case MacOSXPlatform _:
@@ -39,8 +44,10 @@ public static class NativeJobsPrebuiltLibrary
                 if (npc.ToolChain.Architecture.IsX64) return "x64";
                 if (npc.ToolChain.Architecture.IsArmv7) return "arm32";
                 if (npc.ToolChain.Architecture.IsArm64) return "arm64";
-                if (npc.ToolChain.Architecture is WasmArchitecture) return "wasm";
-                if (npc.ToolChain.Architecture is AsmJsArchitecture) return "asmjs";
+                if (npc.ToolChain.Architecture is WasmArchitecture && useWasmBackend) return "wasm";
+                if (npc.ToolChain.Architecture is WasmArchitecture && !useWasmBackend) return "wasm_fc";
+                if (npc.ToolChain.Architecture is AsmJsArchitecture && useWasmBackend) return "asmjs";
+                if (npc.ToolChain.Architecture is AsmJsArchitecture && !useWasmBackend) return "asmjs_fc";
                 //if (npc.ToolChain.Architecture is WasmArchitecture && HAS_THREADING) return "wasm_withthreads";
                 break;
         }

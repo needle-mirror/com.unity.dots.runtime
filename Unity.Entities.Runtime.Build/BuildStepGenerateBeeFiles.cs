@@ -1,25 +1,21 @@
-using Newtonsoft.Json.Linq;
-using System;
-using System.Linq;
-using Unity.Build;
-using Unity.Build.Common;
-using Unity.Build.Internals;
 /*
  * 11/15/2019
  * We are temporarily using Json.NET while we wait for the new com.unity.serialization package release,
  * which will offer similar functionality.
  */
-using Unity.Platforms;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Linq;
+using Unity.Build;
+using Unity.Build.Common;
+using Unity.Build.DotsRuntime;
+using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(description = k_Description, category = "DOTS")]
-    sealed internal class BuildStepGenerateBeeFiles : BuildStep
+    [BuildStep(Name = "Generate Bee Files", Description = "Generating Bee Files", Category = "DOTS")]
+    sealed class BuildStepGenerateBeeFiles : BuildStep
     {
-        const string k_Description = "Generate Bee Files";
-
-        public override string Description => k_Description;
-
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile)
@@ -38,48 +34,41 @@ namespace Unity.Entities.Runtime.Build
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
             var outputDir = profile.BeeRootDirectory;
 
-            var buildSettingsJObject = new JObject();
+            var buildConfigurationJObject = new JObject();
 
             BuildProgramDataFileWriter.WriteAll(outputDir.FullName);
 
             if (HasOptionalComponent<DotsRuntimeScriptingDefines>(context))
-                buildSettingsJObject["ScriptingDefines"] = new JArray(GetOptionalComponent<DotsRuntimeScriptingDefines>(context).ScriptingDefines);
+                buildConfigurationJObject["ScriptingDefines"] = new JArray(GetOptionalComponent<DotsRuntimeScriptingDefines>(context).ScriptingDefines);
 
-            buildSettingsJObject["PlatformTargetIdentifier"] = profile.Target.BeeTargetName;
-            buildSettingsJObject["UseBurst"] = profile.EnableBurst;
-            buildSettingsJObject["EnableManagedDebugging"] = profile.EnableManagedDebugging;
-            buildSettingsJObject["RootAssembly"] = profile.RootAssembly.name;
-            buildSettingsJObject["EnableMultiThreading"] = profile.EnableMultiThreading;
-            buildSettingsJObject["FinalOutputDirectory"] = this.GetOutputBuildDirectory(context);
-            buildSettingsJObject["DotsConfig"] = profile.Configuration.ToString();
+            buildConfigurationJObject["PlatformTargetIdentifier"] = profile.Target.BeeTargetName;
+            buildConfigurationJObject["UseBurst"] = profile.EnableBurst;
+            buildConfigurationJObject["EnableManagedDebugging"] = profile.EnableManagedDebugging;
+            buildConfigurationJObject["RootAssembly"] = profile.RootAssembly.name;
+            buildConfigurationJObject["EnableMultiThreading"] = profile.EnableMultiThreading;
+            buildConfigurationJObject["FinalOutputDirectory"] = this.GetOutputBuildDirectory(context);
+            buildConfigurationJObject["DotsConfig"] = profile.Configuration.ToString();
 
-            var buildSettings = BuildContextInternals.GetBuildSettings(context);
+            var config = BuildContextInternals.GetBuildConfiguration(context);
             //web is broken until we can get all components that modify a particular interface
-            foreach (var component in BuildSettingsInternals.GetComponents<IDotsRuntimeBuildModifier>(buildSettings))
+            foreach (var component in config.GetComponents<IDotsRuntimeBuildModifier>())
             {
-                component.Modify(buildSettingsJObject);
+                component.Modify(buildConfigurationJObject);
             }
 
             var settingsDir = new NPath(outputDir.FullName).Combine("settings");
-            settingsDir.Combine($"{buildSettings.name}.json")
-                .UpdateAllText(buildSettingsJObject.ToString());
+            settingsDir.Combine($"{config.name}.json")
+                .UpdateAllText(buildConfigurationJObject.ToString());
 
-            WriteBeeExportManifestFile(profile, manifest);
+            if (profile.ShouldWriteDataFiles)
+            {
+                var file = profile.StagingDirectory.Combine(config.name).GetFile("export.manifest");
+                file.UpdateAllLines(manifest.ExportedFiles.Select(x => x.FullName).ToArray());
+            }
 
             profile.Target.WriteBeeConfigFile(profile.BeeRootDirectory.ToString());
 
             return Success();
-        }
-
-        private void WriteBeeExportManifestFile(DotsRuntimeBuildProfile profile, BuildManifest manifest)
-        {
-            if (!profile.ShouldWriteDataFiles)
-            {
-                return;
-            }
-
-            var file = profile.StagingDirectory.GetFile("export.manifest");
-            file.UpdateAllLines(manifest.ExportedFiles.Select(x => x.FullName).ToArray());
         }
     }
 }

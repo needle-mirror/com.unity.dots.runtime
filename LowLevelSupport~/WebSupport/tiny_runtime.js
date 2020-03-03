@@ -1,3 +1,4 @@
+/** @suppress{duplicate} This symbol is intended to be present multiple times in the source, the second definition overwrites the first to override default behavior. Closure deletes the first instance. */
 function ready() {
 	try {
 		if (typeof ENVIRONMENT_IS_PTHREAD === 'undefined' || !ENVIRONMENT_IS_PTHREAD) run();

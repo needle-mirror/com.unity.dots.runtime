@@ -153,6 +153,7 @@ namespace Unity.ZeroPlayer
             // Locals
             var arrayVar = new VariableDefinition(module.ImportReference(componentArrayTypeDef));
             method.Body.Variables.Add(arrayVar);
+            method.Body.InitLocals = true;
 
             // Body
             List<Component> components = FindComponents(jobStruct, executeParams);
@@ -326,7 +327,7 @@ namespace Unity.ZeroPlayer
                         MethodDefinition executeMethod = type.Methods.First(f => f.Name == "Execute");
 
                         // There are (so far) 2 flavors of Schedule.
-                        //     Schedule<T>(this T jobData, ComponentSystemBase system, JobHandle dependsOn = default(JobHandle))
+                        //     Schedule<T>(this T jobData, SystemBase system, JobHandle dependsOn = default(JobHandle))
                         //     Schedule<T>(this T jobData, EntityQuery query, JobHandle dependsOn = default(JobHandle))
                         // The only difference being the 2nd parameter.
 

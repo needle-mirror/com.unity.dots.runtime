@@ -24,11 +24,9 @@ namespace Unity.Entities.Runtime.Build
         /// </summary>
         public BuildTypeCache TypeCache { get; } = new BuildTypeCache();
 
-        [Property]
-        [HideInInspector]
+        [Property, HideInInspector]
         public bool EnableManagedDebugging { get; set; } = false;
-        [Property]
-        [HideInInspector]
+        [Property, HideInInspector]
         public bool EnableMultiThreading { get; set; } = false;
         [Property]
         public bool EnableBurst { get; set; } = true;
@@ -65,11 +63,14 @@ namespace Unity.Entities.Runtime.Build
             }
         }
 
+        public int SortingIndex => 0;
+        public bool SetupEnvironment() => false;
+
         /// <summary>
         /// Gets or sets which <see cref="Configuration"/> this profile is going to use for the build.
         /// </summary>
         [Property]
-        public BuildConfiguration Configuration { get; set; } = BuildConfiguration.Develop;
+        public BuildType Configuration { get; set; } = BuildType.Develop;
 
         [Property]
         public BuildPipeline Pipeline { get; set; }
@@ -107,8 +108,6 @@ namespace Unity.Entities.Runtime.Build
 
         public DirectoryInfo BeeRootDirectory => new DirectoryInfo("Library/DotsRuntimeBuild");
         public DirectoryInfo StagingDirectory => new DirectoryInfo($"Library/DotsRuntimeBuild/{ProjectName}");
-        
-        public DirectoryInfo DataDirectory => new DirectoryInfo($"Library/DotsRuntimeBuild/{ProjectName}/Data");
 
         /// <summary>
         /// List of assemblies that should be explicitly excluded for the build.
@@ -136,7 +135,7 @@ namespace Unity.Entities.Runtime.Build
             [InitializeOnLoadMethod]
             static void Initialize()
             {
-                BuildSettings.JsonVisitorRegistration += (JsonVisitor visitor) =>
+                BuildConfiguration.JsonVisitorRegistration += (JsonVisitor visitor) =>
                 {
                     visitor.AddAdapter(new DotsRuntimeBuildProfileJsonAdapter(visitor));
                 };

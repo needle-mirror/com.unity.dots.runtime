@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Bee;
 using Bee.Core;
@@ -42,6 +43,19 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
     public NativeProgram NativeProgram { get; set; }
     public Platform[] IncludePlatforms { get; set; }
     public Platform[] ExcludePlatforms { get; set; }
+
+    // Unilaterally enable warnings as errors for any assembly which matches one of the following patterns
+    static readonly string[] EnableWarningsAsErrorsPatterns = 
+    {
+        @"Unity\..*" // Force Warnings as Errors for all Unity asmdefs
+    };
+
+    // Explicitly prevent enabling warnings as errors for any assembly matched by this list
+    static readonly string[] EnableWarningsAsErrorsExclusionsRegex =
+    {
+        @"\.Tests$", // Exclude all tests from having Warnings as Errors
+        @"Unity.Physics" // Currently generates warnings
+    };
 
     public virtual bool IsSupportedFor(CSharpProgramConfiguration config)
     {
@@ -105,12 +119,16 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         Defines.Add(
             "UNITY_DOTSPLAYER",
             "NET_DOTS",
+            "NET_STANDARD_2_0",
             "UNITY_2018_3_OR_NEWER",
             "UNITY_2019_1_OR_NEWER",
             "UNITY_2019_2_OR_NEWER",
             "UNITY_2019_3_OR_NEWER"
         );
         
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSPLAYER32");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 64, "UNITY_DOTSPLAYER64");
+		
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WebGLPlatform, "UNITY_WEBGL");
         Defines.Add(c =>(c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WindowsPlatform, "UNITY_WINDOWS");
         Defines.Add(c =>(c as DotsRuntimeCSharpProgramConfiguration)?.Platform is MacOSXPlatform, "UNITY_MACOSX");
@@ -121,8 +139,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         CopyReferencesNextToTarget = false;
 
-        WarningsAsErrors = false;
-        //hack, fix this in unity.mathematics
+        SetWarningsAsErrors(name);
 
         foreach (var sourcePath in AllSourcePaths)
         {
@@ -318,7 +335,6 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         });
     }
 
-
     protected class CustomProvideFiles : OneOrMoreFiles
     {
         public NPath SourcePath { get; }
@@ -327,25 +343,31 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         public override IEnumerable<NPath> GetFiles()
         {
-            var files = SourcePath.Files("*.cs",recurse:true);
+            var files = SourcePath.Files("*.cs", recurse:true);
             var ignoreDirectories = FindDirectories();
             return files.Where(f => f.HasExtension("cs") && !ignoreDirectories.Any(f.IsChildOf));
         }
 
         private List<NPath> FindDirectories()
         {
-            var beeDirs = SourcePath.Directories(true).Where(d => d.FileName == "bee~").ToList();
+            var skippedDirs = SourcePath.Directories(true).Where(ShouldSkipName).ToList();
             var ignoreDirectories = SourcePath.Files("*.asm?ef", recurse: true)
                 .Where(f => f.Parent != SourcePath)
                 .Select(asmdef => asmdef.Parent)
-                .Concat(beeDirs)
+                .Concat(skippedDirs)
                 .ToList();
             return ignoreDirectories;
         }
 
+        private bool ShouldSkipName(NPath item)
+        {
+            var filename = item.FileName;
+            return filename[filename.Length - 1] == '~';
+        }
+
         public override IEnumerable<NPath> GetDirectories()
         {
-            return SourcePath.Directories(true).Where(d => d.FileName == "bee~" && !FindDirectories().Any(d.IsChildOf));
+            return SourcePath.Directories(true).Where(d => ShouldSkipName(d) && !FindDirectories().Any(d.IsChildOf));
         }
 
         public override IEnumerable<XElement> CustomMSBuildElements(NPath projectFileParentPath)
@@ -363,6 +385,28 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
                     new XAttribute("Exclude", $"{prefix}bee?\\**\\*.*"))
             };
 
+        }
+    }
+
+    void SetWarningsAsErrors(string assemblyName)
+    {
+        WarningsAsErrors = false;
+
+        foreach (var pattern in EnableWarningsAsErrorsExclusionsRegex)
+        {
+            var regex = new Regex(pattern);
+            if (regex.IsMatch(assemblyName))
+                return;
+        }
+
+        foreach (var pattern in EnableWarningsAsErrorsPatterns)
+        {
+            var regex = new Regex(pattern);
+            if (regex.IsMatch(assemblyName))
+            {
+                WarningsAsErrors = true;
+                return;
+            }
         }
     }
 }

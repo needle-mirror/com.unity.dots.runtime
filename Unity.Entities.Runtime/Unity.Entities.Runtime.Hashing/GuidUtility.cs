@@ -82,7 +82,7 @@ namespace Unity.Entities.Runtime.Hashing
             var j = (byte)(entityGuid.b >> 8);
             var k = (byte)(entityGuid.b >> 0);
 
-            return new Guid(a, b, c, d, e, f, g, h, i, j, k);;
+            return new Guid(a, b, c, d, e, f, g, h, i, j, k);
         }
 
         public static UInt32 ReverseBytes(UInt32 value)

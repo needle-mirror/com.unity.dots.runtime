@@ -13,11 +13,20 @@ namespace Unity.Jobs.LowLevel.Unsafe
         ParallelFor
     }
 
+    public enum WorkStealingState : int
+    {
+        NotInitialized,
+        Initialized,
+        Done
+    }
+
     // NOTE: This doesn't match (big) Unity's JobRanges because JobsUtility.GetWorkStealingRange isn't fully implemented
     public struct JobRanges
     {
         public int ArrayLength;
         public int IndicesPerPhase;
+        public WorkStealingState State;
+        public int runOnMainThread;
     }
 
     // The internally used header for JobData
@@ -25,17 +34,44 @@ namespace Unity.Jobs.LowLevel.Unsafe
     // Trivial with one entry, but declared here as a reminder.
     // Also, to preserve alignment, code-gen is using a size=16
     // for this structure.
-    [StructLayout(LayoutKind.Explicit, Size = 16)]
-    struct JobMetaData
+    [StructLayout(LayoutKind.Explicit, Size = 64)]
+    unsafe struct JobMetaData
     {
+        // Must be the zero offset (JobMetaDataPtr === JobRanges in InterfaceGen)
         [FieldOffset(0)]
         public JobRanges JobRanges;
+
+        // Sync with InterfaceGen.cs!
+        public const int kJobMetaDataIsParallelOffset = 16;
+        [FieldOffset(kJobMetaDataIsParallelOffset)]
+        public int isParallelFor;
+
+        // Sync with InterfaceGen.cs!
+        const int kJobMetaDataJobSize = 20;
+        [FieldOffset(kJobMetaDataJobSize)]
+        public int jobDataSize;
+
+        // Sync with InterfaceGen.cs!
+        const int kJobMetaDataDeferredDataPtr = 24;
+        [FieldOffset(kJobMetaDataDeferredDataPtr)]
+        public void* deferredDataPtr;
+
+        // Sync with InterfaceGen.cs!
+        const int kJobMetaDataManagedPtr = 32;
+        [FieldOffset(kJobMetaDataManagedPtr)]
+        public void* managedPtr;
+
+        // Sync with InterfaceGen.cs!
+        const int kJobMetaDataUnmanagedPtr = 40;
+        [FieldOffset(kJobMetaDataUnmanagedPtr)]
+        public void* unmanagedPtr;
     }
 
-    public enum ScheduleMode
+    public enum ScheduleMode : int
     {
         Run,
-        Batched
+        Batched,
+        RunOnMainThread
     }
 
     [AttributeUsage(AttributeTargets.Interface)]
@@ -54,55 +90,73 @@ namespace Unity.Jobs.LowLevel.Unsafe
     public static class JobsUtility
     {
 #if UNITY_SINGLETHREADED_JOBS
-        public static int JobWorkerCount => 0;
+        public static readonly int JobWorkerCount = 0;
+        public const int MaxJobThreadCount = 1;
 #else
-        public static int JobWorkerCount => Environment.ProcessorCount;
-#endif
+        // https://unity3d.atlassian.net/browse/DOTSR-1075
+        public static readonly int JobWorkerCount = 8; // Environment.ProcessorCount;
         public const int MaxJobThreadCount = 128;
+#endif
         public const int CacheLineSize = 64;
 
         public static bool JobCompilerEnabled => false;
         public static bool JobDebuggerEnabled => false;
 
-#if UNITY_SINGLETHREADED_JOBS
-        // Used for the safety system. If a job
-        // is running, this will be true. For the multi-threaded
-        // case, threadIDs can be used.
-        public static bool InJob = false;
-#endif
-
         [StructLayout(LayoutKind.Sequential)]
         public struct JobScheduleParameters
         {
             public JobHandle    Dependency;
-            public int          ScheduleMode;
+            public ScheduleMode ScheduleMode;
             public IntPtr       ReflectionData;
             public IntPtr       JobDataPtr;
 
-            public unsafe JobScheduleParameters(void* jobData, IntPtr reflectionData, JobHandle jobDependency,
-                ScheduleMode scheduleMode, int jobDataSize = 0, int schedule = 3)
+            public unsafe JobScheduleParameters(void* jobData,
+                IntPtr reflectionData,
+                JobHandle jobDependency,
+                ScheduleMode scheduleMode,
+                int jobDataSize = 0,
+                int producerJobSchedule = 1,
+                int userJobSchedule = 3,
+                int isBursted = 5)
             {
+                // Synchronize with InterfaceGen.cs!
+                const int k_ProducerScheduleReturnValue = 4;
+                const int k_UserScheduleReturnValue = 2;
+
+                const string k_PostFix = " Seeing this error indicates a bug in the dots compiler. We'd appreciate a bug report (About->Report a Bug...).";
+
                 // Default is 0; code-gen should set to a correct size.
                 if (jobDataSize == 0)
-                    throw new InvalidOperationException("JobScheduleParameters (size) should be set by code-gen.");
-                // Default is 1; however, the function created by code gen will always return 2.
-                if (schedule != 2)
+                    throw new InvalidOperationException("JobScheduleParameters (size) should be set by code-gen." + k_PostFix);
+                if (producerJobSchedule != k_ProducerScheduleReturnValue)
                     throw new InvalidOperationException(
-                        "JobScheduleParameter (which is the return code of PrepareJobAtScheduleTimeFn_Gen) should be set by code-gen.");
+                        "JobScheduleParameter (which is the return code of ProducerScheduleFn_Gen) should be set by code-gen." + k_PostFix);
+                if (userJobSchedule != k_UserScheduleReturnValue)
+                    throw new InvalidOperationException(
+                        "JobScheduleParameter (which is the return code of PrepareJobAtScheduleTimeFn_Gen) should be set by code-gen." + k_PostFix);
+                if (!(isBursted == 0 || isBursted == 1))
+                    throw new InvalidOperationException(
+                        "JobScheduleParameter (which is the return code of RunOnMainThread_Gen) should be set by code-gen." + k_PostFix);
 
-                Assert.IsTrue(sizeof(JobMetaData) % 16 == 0);
-                int headerSize = sizeof(JobMetaData);
-                int size = headerSize + jobDataSize;
+                int nWorkers = JobWorkerCount > 0 ? JobWorkerCount : 1;
+                void* mem = AllocateJobHeapMemory(jobDataSize, nWorkers);
 
-                void* mem = UnsafeUtility.Malloc(size, 16, Allocator.TempJob);
-                UnsafeUtility.MemClear(mem, size);
-                UnsafeUtility.MemCpy(((byte*)mem + headerSize), jobData, jobDataSize);
+                // A copy of the JobData is needed *for each worker thread* as it will
+                // get mutated in unique ways (threadIndex, safety.) The jobIndex is passed
+                // to the Execute method, so a thread can look up the correct jobData to use.
+                // Cleanup is always called on jobIndex=0.
+                for(int i=0; i<nWorkers; i++)
+                    UnsafeUtility.MemCpy(((byte*)mem + sizeof(JobMetaData) + jobDataSize*i), jobData, jobDataSize);
                 UnsafeUtility.AssertHeap(mem);
+
+                JobMetaData jobMetaData = new JobMetaData();
+                jobMetaData.jobDataSize = jobDataSize;
+                UnsafeUtility.CopyStructureToPtr(ref jobMetaData, mem);
 
                 Dependency = jobDependency;
                 JobDataPtr = (IntPtr) mem;
                 ReflectionData = reflectionData;
-                ScheduleMode = (int) scheduleMode;
+                ScheduleMode = isBursted == 0 ? ScheduleMode.RunOnMainThread : scheduleMode;
             }
         }
 
@@ -112,7 +166,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
             // Error checking? The pointers certainly can't change.
             // This class registers the function pointers with the GC.
             // TODO a more elegant solution, or switch to calli and avoid this.
-            public ReflectionDataStore(Delegate executeDelegate, Delegate codeGenCleanupDelegate, Delegate codeGenExecuteDelegate, Delegate codeGenMarshalDelegate)
+            public ReflectionDataStore(Delegate executeDelegate, Delegate codeGenCleanupDelegate, Delegate codeGenExecuteDelegate, Delegate codeGenMarshalToBurstDelegate)
             {
                 ExecuteDelegate = executeDelegate;
                 ExecuteDelegateHandle = GCHandle.Alloc(ExecuteDelegate);
@@ -131,11 +185,11 @@ namespace Unity.Jobs.LowLevel.Unsafe
                     CodeGenExecuteFunctionPtr = Marshal.GetFunctionPointerForDelegate(codeGenExecuteDelegate);
                 }
 
-                if (codeGenMarshalDelegate != null)
+                if (codeGenMarshalToBurstDelegate != null)
                 {
-                    CodeGenMarshalDelegate = codeGenMarshalDelegate;
-                    CodeGenMarshalDelegateHandle = GCHandle.Alloc(CodeGenMarshalDelegate);
-                    CodeGenMarshalFunctionPtr = Marshal.GetFunctionPointerForDelegate(codeGenMarshalDelegate);
+                    CodeGenMarshalToBurstDelegate = codeGenMarshalToBurstDelegate;
+                    CodeGenMarshalToBurstDelegateHandle = GCHandle.Alloc(CodeGenMarshalToBurstDelegate);
+                    CodeGenMarshalToBurstFunctionPtr = Marshal.GetFunctionPointerForDelegate(codeGenMarshalToBurstDelegate);
                 }
             }
 
@@ -152,30 +206,35 @@ namespace Unity.Jobs.LowLevel.Unsafe
             public GCHandle CodeGenExecuteDelegateHandle;
             public IntPtr   CodeGenExecuteFunctionPtr;
 
-            public Delegate CodeGenMarshalDelegate;
-            public GCHandle CodeGenMarshalDelegateHandle;
-            public IntPtr   CodeGenMarshalFunctionPtr;
+            public Delegate CodeGenMarshalToBurstDelegate;
+            public GCHandle CodeGenMarshalToBurstDelegateHandle;
+            public IntPtr   CodeGenMarshalToBurstFunctionPtr;
         }
 
         [StructLayout(LayoutKind.Sequential)]
         struct ReflectionDataProxy
         {
             public JobType JobType;
-            public IntPtr  GenExecuteFunctionPtr;
-            public IntPtr  GenCleanupFunctionPtr;
+            public IntPtr  ExecuteFunctionPtr;
+            public IntPtr  CleanupFunctionPtr;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
             public int     UnmanagedSize;
-            public IntPtr  GenMarshalFunctionPtr;
+            public IntPtr  MarshalToBurstFunctionPtr;
 #endif
         }
 
         public unsafe delegate void ManagedJobDelegate(void* ptr);
+        // TODO: Should be ManagedJobExecuteDelegate, but waiting for Burst update.
         public unsafe delegate void ManagedJobForEachDelegate(void* ptr, int jobIndex);
         public unsafe delegate void ManagedJobMarshalDelegate(void* dst, void* src);
 
         static private ReflectionDataStore reflectionDataStoreRoot = null;
 
-        const string nativejobslib = "nativejobs";
+#if UNITY_WINDOWS
+        internal const string nativejobslib = "nativejobs";
+#else
+        internal const string nativejobslib = "libnativejobs";
+#endif
 
 #if !UNITY_SINGLETHREADED_JOBS
         internal static IntPtr JobQueue
@@ -262,20 +321,27 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
         [DllImport(nativejobslib)]
         internal static extern int IsCompleted(IntPtr scheduler, ref JobHandle jobHandle);
-#endif
+
         // The following are needed regardless if we are in single or multi-threaded environment
         [DllImport(nativejobslib, EntryPoint = "IsExecutingJob")]
         internal static extern int IsExecutingJobInternal();
 
-        public static bool IsExecutingJob() { return IsExecutingJobInternal() != 0; }
+        public static bool IsExecutingJob() { return (IsExecutingJobInternal() != 0) || (UnsafeUtility.GetInJob() > 0); }
+#else
+        public static bool IsExecutingJob()
+        {
+            return UnsafeUtility.GetInJob() > 0;
+        }
+#endif
+
 
         public static unsafe IntPtr CreateJobReflectionData(Type type, Type _, JobType jobType,
             Delegate executeDelegate,
             Delegate cleanupDelegate = null,
-            ManagedJobForEachDelegate codegenExecuteDelegate = null,       // Note ManagedJobForEachDelegate is used for both Normal and ParallelFor job types
+            ManagedJobForEachDelegate codegenExecuteDelegate = null,
             ManagedJobDelegate codegenCleanupDelegate = null,
             int codegenUnmanagedJobSize = -1,
-            ManagedJobMarshalDelegate codegenMarshalDelegate = null)
+            ManagedJobMarshalDelegate codegenMarshalToBurstDelegate = null)
         {
             // Tiny doesn't use this on any codepath currently; may need future support for custom jobs.
             Assert.IsTrue(cleanupDelegate == null, "Runtime needs support for cleanup delegates in jobs.");
@@ -283,7 +349,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
             Assert.IsTrue(codegenExecuteDelegate != null, "Code gen should have supplied an execute wrapper.");
             Assert.IsTrue(jobType != JobType.ParallelFor || codegenCleanupDelegate != null, "For ParallelFor jobs, code gen should have supplied a cleanup wrapper.");
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
-            Assert.IsTrue((codegenUnmanagedJobSize != -1 && codegenMarshalDelegate != null) || (codegenUnmanagedJobSize == -1 && codegenMarshalDelegate == null), "Code gen should have supplied a marshal wrapper.");
+            Assert.IsTrue((codegenUnmanagedJobSize != -1 && codegenMarshalToBurstDelegate != null) || (codegenUnmanagedJobSize == -1 && codegenMarshalToBurstDelegate == null), "Code gen should have supplied a marshal wrapper.");
 #endif
 
             var reflectionDataPtr = UnsafeUtility.Malloc(UnsafeUtility.SizeOf<ReflectionDataProxy>(),
@@ -293,18 +359,18 @@ namespace Unity.Jobs.LowLevel.Unsafe
             reflectionData.JobType = jobType;
 
             // Protect against garbage collector relocating delegate
-            ReflectionDataStore store = new ReflectionDataStore(executeDelegate, codegenCleanupDelegate, codegenExecuteDelegate, codegenMarshalDelegate);
+            ReflectionDataStore store = new ReflectionDataStore(executeDelegate, codegenCleanupDelegate, codegenExecuteDelegate, codegenMarshalToBurstDelegate);
             store.next = reflectionDataStoreRoot;
             reflectionDataStoreRoot = store;
 
-            reflectionData.GenExecuteFunctionPtr = store.CodeGenExecuteFunctionPtr;
+            reflectionData.ExecuteFunctionPtr = store.CodeGenExecuteFunctionPtr;
             if (codegenCleanupDelegate != null)
-                reflectionData.GenCleanupFunctionPtr = store.CodeGenCleanupFunctionPtr;
+                reflectionData.CleanupFunctionPtr = store.CodeGenCleanupFunctionPtr;
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
             reflectionData.UnmanagedSize = codegenUnmanagedJobSize;
             if(codegenUnmanagedJobSize != -1)
-                reflectionData.GenMarshalFunctionPtr = store.CodeGenMarshalFunctionPtr; 
+                reflectionData.MarshalToBurstFunctionPtr = store.CodeGenMarshalToBurstFunctionPtr;
 #endif
 
             UnsafeUtility.CopyStructureToPtr(ref reflectionData, reflectionDataPtr);
@@ -320,92 +386,58 @@ namespace Unity.Jobs.LowLevel.Unsafe
 #else
         public static int GetDefaultIndicesPerPhase(int arrayLength)
         {
-            return Math.Max((arrayLength + (JobWorkerCount - 1)) / JobWorkerCount, 1);
+            return (JobWorkerCount > 0) ? Math.Max((arrayLength + (JobWorkerCount - 1)) / JobWorkerCount, 1) : 1;
         }
 #endif
 
         // TODO: Currently, the actual work stealing code sits in (big) Unity's native code w/ some dependencies
-        //     For now, let's simply split the work for each thread over the number of job threads
+        // This is implemented trying to use the same code pattern:
+        //        while (true)
+        //        {
+        //            if (!JobsUtility.GetWorkStealingRange(ref ranges, jobIndex, out int begin, out int end))
+        //                break;
         public static bool GetWorkStealingRange(ref JobRanges ranges, int jobIndex, out int begin, out int end)
         {
+            if (ranges.State == WorkStealingState.Done)
+            {
+                begin = 0;
+                end = 0;
+                return false;
+            }
+
 #if UNITY_SINGLETHREADED_JOBS
-            // IndicesPerPhase is used as a "done" flag.
-            bool done = ranges.IndicesPerPhase == 0;
-            begin = 0;
-            end = ranges.ArrayLength;
-            ranges.IndicesPerPhase = 0;
-            return !done;
+            {
 #else
-            begin = jobIndex * ranges.IndicesPerPhase;
-            end = Math.Min(begin + ranges.IndicesPerPhase, ranges.ArrayLength);
-            ranges.IndicesPerPhase = 0;
-            return begin < end;
+            if (ranges.runOnMainThread > 0) {
+#endif
+
+                // There's only one thread, and the IndicesPerPhase don't have much meaning.
+                // Do everything in one block of work.
+                begin = 0;
+                end = ranges.ArrayLength;
+                ranges.State = WorkStealingState.Done;
+                return end > begin;
+            }
+#if !UNITY_SINGLETHREADED_JOBS
+
+            // Divide the work equally.
+            // TODO improve by accounting for the indices per phase.
+
+            int nWorker = JobWorkerCount > 0 ? JobWorkerCount : 1;
+            begin = jobIndex * ranges.ArrayLength / nWorker;
+            end = (jobIndex + 1) * ranges.ArrayLength / nWorker;
+
+            if (end > ranges.ArrayLength)
+                end = ranges.ArrayLength;
+            if (jobIndex == nWorker - 1)
+                end = ranges.ArrayLength;
+
+            ranges.State = WorkStealingState.Done;
+            return end > begin;
 #endif
         }
 
-        public static unsafe JobHandle ScheduleParallelFor(ref JobScheduleParameters parameters, int arrayLength, int innerloopBatchCount)
-        {
-            UnsafeUtility.AssertHeap(parameters.JobDataPtr.ToPointer());
-            UnsafeUtility.AssertHeap(parameters.ReflectionData.ToPointer());
-            ReflectionDataProxy jobReflectionData = UnsafeUtility.AsRef<ReflectionDataProxy>(parameters.ReflectionData.ToPointer());
-
-            Assert.IsFalse(jobReflectionData.GenExecuteFunctionPtr.ToPointer() == null);
-            Assert.IsFalse(jobReflectionData.GenCleanupFunctionPtr.ToPointer() == null);
-#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
-            Assert.IsTrue((jobReflectionData.UnmanagedSize != -1 && jobReflectionData.GenMarshalFunctionPtr != IntPtr.Zero)
-                || (jobReflectionData.UnmanagedSize == -1 && jobReflectionData.GenMarshalFunctionPtr == IntPtr.Zero));
-#endif
-
-            void* managedJobDataPtr = parameters.JobDataPtr.ToPointer();
-            JobMetaData jobMetaData = default;
-            jobMetaData.JobRanges.ArrayLength = arrayLength;
-            jobMetaData.JobRanges.IndicesPerPhase = GetDefaultIndicesPerPhase(arrayLength);
-            UnsafeUtility.CopyStructureToPtr(ref jobMetaData, managedJobDataPtr);
-
-
-#if UNITY_SINGLETHREADED_JOBS
-            InJob = true;
-#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
-            // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
-            // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
-            if (jobReflectionData.UnmanagedSize != -1)
-            {
-                const int kAlignment = 16;
-                int metadataSize = UnsafeUtility.SizeOf<JobMetaData>();
-
-                int alignedSize = (jobReflectionData.UnmanagedSize + metadataSize + kAlignment - 1) & ~(kAlignment - 1);
-                byte* unmanagedJobData = stackalloc byte[alignedSize];              
-                void* alignedUnmanagedJobData = (void*)((UInt64)(unmanagedJobData + kAlignment - 1) & ~(UInt64)(kAlignment - 1));
-
-                void* dst = (byte*)alignedUnmanagedJobData + metadataSize;
-                void* src = (byte*)managedJobDataPtr + metadataSize;
-                UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.GenMarshalFunctionPtr.ToPointer(), dst, src);
-                UnsafeUtility.CopyStructureToPtr(ref jobMetaData, alignedUnmanagedJobData);
-
-                // In the single threaded case, this is synchronous execution.
-                UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.GenExecuteFunctionPtr.ToPointer(), alignedUnmanagedJobData, 0);
-            }
-            else
-#endif
-            {
-                // In the single threaded case, this is synchronous execution.
-                UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.GenExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
-            }
-
-            // The cleanup function is not bursted, so ensure we call the function with the managed job layout
-            UnsafeUtility.CallFunctionPtr_p(jobReflectionData.GenCleanupFunctionPtr.ToPointer(), managedJobDataPtr);
-
-            // This checks that the generated code was actually called; the last responsibility of
-            // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-            Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
-            InJob = false;
-            return new JobHandle();
-#else
-            return ScheduleJobParallelFor(jobReflectionData.GenExecuteFunctionPtr, jobReflectionData.GenCleanupFunctionPtr,
-                parameters.JobDataPtr, arrayLength, innerloopBatchCount, parameters.Dependency);
-#endif
-        }
-
+        // Used by code-gen, and nothing but code-gen should call it.
         static unsafe int CountFromDeferredData(void* deferredCountData)
         {
             // The initial count (which is what tiny only uses) is the `int` past the first `void*`.
@@ -413,11 +445,153 @@ namespace Unity.Jobs.LowLevel.Unsafe
             return count;
         }
 
+        public static unsafe JobHandle ScheduleParallelFor(ref JobScheduleParameters parameters, int arrayLength, int innerloopBatchCount)
+        {
+            return ScheduleParallelForInternal(ref parameters, arrayLength, null, innerloopBatchCount);
+        }
+
         public static unsafe JobHandle ScheduleParallelForDeferArraySize(ref JobScheduleParameters parameters,
             int innerloopBatchCount, void* getInternalListDataPtrUnchecked, void* atomicSafetyHandlePtr)
         {
+            return ScheduleParallelForInternal(ref parameters, -1, getInternalListDataPtrUnchecked, innerloopBatchCount);
+        }
 
-            return ScheduleParallelFor(ref parameters, CountFromDeferredData(getInternalListDataPtrUnchecked), innerloopBatchCount);
+        static unsafe void CopyMetaDataToJobData(ref JobMetaData jobMetaData, void* managedJobDataPtr, void* unmanagedJobData)
+        {
+            jobMetaData.managedPtr = managedJobDataPtr;
+            jobMetaData.unmanagedPtr = unmanagedJobData;
+            if (unmanagedJobData != null)
+                UnsafeUtility.CopyStructureToPtr(ref jobMetaData, unmanagedJobData);
+            if (managedJobDataPtr != null)
+                UnsafeUtility.CopyStructureToPtr(ref jobMetaData, managedJobDataPtr);
+        }
+
+        static unsafe void* AllocateJobHeapMemory(int jobSize, int n)
+        {
+            if (jobSize < 8) jobSize = 8;   // handles the odd case of empty job
+            int metadataSize = UnsafeUtility.SizeOf<JobMetaData>();
+            int allocSize = metadataSize + jobSize * n;
+            void* mem = UnsafeUtility.Malloc(allocSize, 16, Allocator.TempJob);
+            UnsafeUtility.MemClear(mem, allocSize);
+            return mem;
+        }
+
+        static unsafe JobHandle ScheduleParallelForInternal(ref JobScheduleParameters parameters, int arrayLength, void* deferredDataPtr, int innerloopBatchCount)
+        {
+            // May provide an arrayLength (>=0) OR a deferredDataPtr, but both is senseless.
+            Assert.IsTrue((arrayLength >= 0 && deferredDataPtr == null) || (arrayLength < 0 && deferredDataPtr != null));
+
+            UnsafeUtility.AssertHeap(parameters.JobDataPtr.ToPointer());
+            UnsafeUtility.AssertHeap(parameters.ReflectionData.ToPointer());
+            ReflectionDataProxy jobReflectionData = UnsafeUtility.AsRef<ReflectionDataProxy>(parameters.ReflectionData.ToPointer());
+
+            Assert.IsFalse(jobReflectionData.ExecuteFunctionPtr.ToPointer() == null);
+            Assert.IsFalse(jobReflectionData.CleanupFunctionPtr.ToPointer() == null);
+#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
+            Assert.IsTrue((jobReflectionData.UnmanagedSize != -1 && jobReflectionData.MarshalToBurstFunctionPtr != IntPtr.Zero)
+                || (jobReflectionData.UnmanagedSize == -1 && jobReflectionData.MarshalToBurstFunctionPtr == IntPtr.Zero));
+#endif
+            void* managedJobDataPtr = parameters.JobDataPtr.ToPointer();
+            JobMetaData jobMetaData;
+
+            UnsafeUtility.CopyPtrToStructure(parameters.JobDataPtr.ToPointer(), out jobMetaData);
+            Assert.IsTrue(jobMetaData.jobDataSize > 0); // set by JobScheduleParameters
+            Assert.IsTrue(sizeof(JobRanges) <= JobMetaData.kJobMetaDataIsParallelOffset);
+            jobMetaData.JobRanges.ArrayLength = (arrayLength >= 0) ? arrayLength : 0;
+            jobMetaData.JobRanges.IndicesPerPhase = (arrayLength >= 0) ? GetDefaultIndicesPerPhase(arrayLength) : 1; // TODO indicesPerPhase isn't actually used, except as a flag.
+            jobMetaData.JobRanges.runOnMainThread = parameters.ScheduleMode == ScheduleMode.RunOnMainThread ? 1 : 0;
+            jobMetaData.isParallelFor = 1;
+            jobMetaData.deferredDataPtr = deferredDataPtr;
+
+#if UNITY_SINGLETHREADED_JOBS
+            bool runSingleThreadSynchronous = true;
+#else
+            bool runSingleThreadSynchronous = parameters.ScheduleMode == ScheduleMode.RunOnMainThread;
+#endif
+            JobHandle jobHandle = default;
+
+            if (runSingleThreadSynchronous)
+            {
+                parameters.Dependency.Complete();
+                UnsafeUtility.SetInJob(1);
+#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
+
+                // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
+                // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+                if (jobReflectionData.UnmanagedSize != -1)
+                {
+                    void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
+
+                    void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData);
+                    void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData);
+                    UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+
+                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+
+                    // In the single threaded case, this is synchronous execution.
+                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
+                    UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
+                }
+                else
+#endif
+                {
+                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+
+                    // In the single threaded case, this is synchronous execution.
+                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
+                    UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
+                }
+
+#if UNITY_SINGLETHREADED_JOBS
+
+                // This checks that the generated code was actually called; the last responsibility of
+                // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+#endif
+                UnsafeUtility.SetInJob(0);
+                return jobHandle;
+            }
+#if !UNITY_SINGLETHREADED_JOBS
+#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
+            // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
+            // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+            if (jobReflectionData.UnmanagedSize != -1)
+            {
+                int nWorker = JobWorkerCount > 1 ? JobWorkerCount : 1;
+                void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, nWorker);
+
+                for (int i = 0; i < nWorker; i++)
+                {
+                    void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData) + i * jobReflectionData.UnmanagedSize;
+                    void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData) + i * jobMetaData.jobDataSize;
+                    UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+                }
+
+                // Need to change the jobDataSize so the job will have the correct stride when finding
+                // the correct jobData for a thread.
+                JobMetaData unmanagedJobMetaData = jobMetaData;
+                unmanagedJobMetaData.jobDataSize = jobReflectionData.UnmanagedSize;
+                CopyMetaDataToJobData(ref unmanagedJobMetaData, managedJobDataPtr, unmanagedJobData);
+
+                jobHandle = ScheduleJobParallelFor(jobReflectionData.ExecuteFunctionPtr,
+                    jobReflectionData.CleanupFunctionPtr, new IntPtr(unmanagedJobData), arrayLength,
+                    innerloopBatchCount, parameters.Dependency);
+            }
+            else
+#endif
+            {
+                CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+                jobHandle = ScheduleJobParallelFor(jobReflectionData.ExecuteFunctionPtr,
+                    jobReflectionData.CleanupFunctionPtr, parameters.JobDataPtr, arrayLength,
+                    innerloopBatchCount, parameters.Dependency);
+            }
+
+            if (parameters.ScheduleMode == ScheduleMode.Run)
+            {
+                jobHandle.Complete();
+            }
+#endif
+            return jobHandle;
         }
 
         public static unsafe JobHandle Schedule(ref JobScheduleParameters parameters)
@@ -427,58 +601,101 @@ namespace Unity.Jobs.LowLevel.Unsafe
             UnsafeUtility.AssertHeap(parameters.ReflectionData.ToPointer());
             ReflectionDataProxy jobReflectionData = UnsafeUtility.AsRef<ReflectionDataProxy>(parameters.ReflectionData.ToPointer());
 
-            Assert.IsFalse(jobReflectionData.GenExecuteFunctionPtr.ToPointer() == null);
-            Assert.IsTrue(jobReflectionData.GenCleanupFunctionPtr.ToPointer() == null);
+            Assert.IsTrue(jobReflectionData.ExecuteFunctionPtr.ToPointer() != null);
+            Assert.IsTrue(jobReflectionData.CleanupFunctionPtr.ToPointer() != null);
+
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
-            Assert.IsTrue((jobReflectionData.UnmanagedSize != -1 && jobReflectionData.GenMarshalFunctionPtr != IntPtr.Zero) 
-                || (jobReflectionData.UnmanagedSize == -1 && jobReflectionData.GenMarshalFunctionPtr == IntPtr.Zero));
+            Assert.IsTrue((jobReflectionData.UnmanagedSize != -1 && jobReflectionData.MarshalToBurstFunctionPtr != IntPtr.Zero)
+                || (jobReflectionData.UnmanagedSize == -1 && jobReflectionData.MarshalToBurstFunctionPtr == IntPtr.Zero));
 #endif
 
             void* managedJobDataPtr = parameters.JobDataPtr.ToPointer();
+            JobMetaData jobMetaData;
+
+            Assert.IsTrue(sizeof(JobRanges) <= JobMetaData.kJobMetaDataIsParallelOffset);
+            UnsafeUtility.CopyPtrToStructure(managedJobDataPtr, out jobMetaData);
+            Assert.IsTrue(jobMetaData.jobDataSize > 0); // set by JobScheduleParameters
+            jobMetaData.managedPtr = managedJobDataPtr;
+            UnsafeUtility.CopyStructureToPtr(ref jobMetaData, managedJobDataPtr);
 
 #if UNITY_SINGLETHREADED_JOBS
-            InJob = true;
+            bool runSingleThreadSynchronous = true;
+#else
+            bool runSingleThreadSynchronous = parameters.ScheduleMode == ScheduleMode.RunOnMainThread || parameters.ScheduleMode == ScheduleMode.Run;
+#endif
+            JobHandle jobHandle = default;
+
+            if (runSingleThreadSynchronous)
+            {
+                parameters.Dependency.Complete();
+                UnsafeUtility.SetInJob(1);
+#if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
+
+                // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
+                // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+                if (jobReflectionData.UnmanagedSize != -1)
+                {
+                    void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
+
+                    void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData);
+                    void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData);
+                    UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+
+                    // In the single threaded case, this is synchronous execution.
+                    // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
+                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
+
+#if UNITY_SINGLETHREADED_JOBS
+
+                    // This checks that the generated code was actually called; the last responsibility of
+                    // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                    Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+#endif
+                }
+                else
+#endif
+                {
+                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+
+                    // In the single threaded case, this is synchronous execution.
+                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
+
+#if UNITY_SINGLETHREADED_JOBS
+
+                    // This checks that the generated code was actually called; the last responsibility of
+                    // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                    Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+#endif
+                }
+
+                UnsafeUtility.SetInJob(0);
+                return jobHandle;
+            }
+#if !UNITY_SINGLETHREADED_JOBS
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
             // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
-            // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+            // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn.
+            // This time though, we have a whole bunch of jobs that need to be processed.
             if (jobReflectionData.UnmanagedSize != -1)
             {
-                int metadataSize = UnsafeUtility.SizeOf<JobMetaData>();
-                int allocSize = jobReflectionData.UnmanagedSize + metadataSize;
-                void* unmanagedJobData = UnsafeUtility.Malloc(allocSize, 16, Allocator.TempJob);
-                // The ECMA specifies that all memory allocated for objects will be zero initialized. Since
-                // we might compare components in our job (which could be a memcmp) we need to ensure the memory is zeroed
-                UnsafeUtility.MemClear(unmanagedJobData, allocSize);
+                void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
 
-                void* dst = (byte*)unmanagedJobData + metadataSize;
-                void* src = (byte*)managedJobDataPtr + metadataSize;
-                UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.GenMarshalFunctionPtr.ToPointer(), dst, src); 
-                // In the single threaded case, this is synchronous execution.
-                UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.GenExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
+                void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData);
+                void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData);
+                UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
-                // This checks that the generated code was actually called; the last responsibility of
-                // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-                Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == unmanagedJobData);
-
-                // We need to call free for the managed ptr since the ExecuteFn (which calls the cleanup) will have only freed
-                // our unmanagedJobData buffer allocated above)
-                UnsafeUtility.Free(managedJobDataPtr, Allocator.TempJob);
+                CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+                jobHandle = ScheduleJob(jobReflectionData.ExecuteFunctionPtr, new IntPtr(unmanagedJobData), parameters.Dependency);
             }
             else
 #endif
             {
-                // In the single threaded case, this is synchronous execution.
-                UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.GenExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
-
-                // This checks that the generated code was actually called; the last responsibility of
-                // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-                Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+                CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+                jobHandle = ScheduleJob(jobReflectionData.ExecuteFunctionPtr, parameters.JobDataPtr, parameters.Dependency);
             }
-            InJob = false;
-            return new JobHandle();
-#else
-            return ScheduleJob(jobReflectionData.GenExecuteFunctionPtr, parameters.JobDataPtr, parameters.Dependency);
 #endif
+            return jobHandle;
         }
 
         public static unsafe void PatchBufferMinMaxRanges(IntPtr bufferRangePatchData, void* jobdata, int startIndex,
@@ -487,7 +704,6 @@ namespace Unity.Jobs.LowLevel.Unsafe
             // TODO https://unity3d.atlassian.net/browse/DOTSR-282
         }
     }
-
 
     public static class JobHandleUnsafeUtility
     {

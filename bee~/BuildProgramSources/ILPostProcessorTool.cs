@@ -81,7 +81,7 @@ static class ILPostProcessorTool
                 .Concat(
                     new[]
                     {
-                        Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll").QuoteForProcessStart(),
+                        Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll").MakeAbsolute().QuoteForProcessStart(),
                         Il2Cpp.TinyCorlib.Path.MakeAbsolute().QuoteForProcessStart()
                     });
             var referencesArg = "--assemblyReferences " + referenceAsmPaths.Distinct().Aggregate((s1, s2) => s1 + "," + s2);

@@ -76,13 +76,13 @@ const void* NativeGetExternalFunctionPointerCallback(const char* name)
     //starts_with in stl
     if (nameRef.rfind("#dllimport:", 0) == 0) 
     {
-        auto seperatorIndex = nameRef.find_first_of('|');
+        auto separatorIndex = nameRef.find_first_of('|');
         //Assert(seperatorIndex > 11 && seperatorIndex != nameRef.length() - 1);
 
         // Length of the prefix
         auto libraryNameOffset = 11;
-        string libraryName(nameRef.substr(libraryNameOffset, seperatorIndex - libraryNameOffset));
-        string functionName(nameRef.substr(seperatorIndex + 1));
+        string libraryName(nameRef.substr(libraryNameOffset, separatorIndex - libraryNameOffset));
+        string functionName(nameRef.substr(separatorIndex + 1));
 
         auto moduleIt = moduleNameToPointer.find(libraryName);
         void* library;
@@ -91,10 +91,15 @@ const void* NativeGetExternalFunctionPointerCallback(const char* name)
             // Load the library
             //hax
             //HMODULE library = SetDllDirectoryA(libraryName.c_str(), 0);
+            if (libraryName.size() > 4 && libraryName.substr(libraryName.size()-4, 4) == ".dll")
+            {
+                libraryName = libraryName.substr(0, libraryName.size()-4);
+            }
+           
             library = loadLibrary(libraryName.c_str());
             if (library == NULL)
             {
-                printf("Unable to load plugin `%s`", libraryName.c_str());
+                printf("Unable to load plugin `%s`\n", libraryName.c_str());
                 return NULL;
             }
 

@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
-using Unity.Build;
 using Unity.Platforms;
+using Unity.Build;
 
 namespace Unity.Entities.Runtime.Build
 {

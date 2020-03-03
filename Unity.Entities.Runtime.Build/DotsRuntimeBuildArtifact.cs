@@ -4,7 +4,7 @@ using Unity.Properties;
 
 namespace Unity.Entities.Runtime.Build
 {
-    internal class DotsRuntimeBuildArtifact : IBuildArtifact
+    internal sealed class DotsRuntimeBuildArtifact : IBuildArtifact
     {
         [Property] public FileInfo OutputTargetFile { get; set; }
     }

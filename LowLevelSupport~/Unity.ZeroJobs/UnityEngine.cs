@@ -1,52 +1,78 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+#if DEBUG && !UNITY_WEBGL
+using Unity.Development;
+#endif
 #if !NET_DOTS
 using System.Text.RegularExpressions;
 #endif
-using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
-using Unity.Jobs.LowLevel.Unsafe;
-using UnityEngine;
-using UnityEngine.Assertions;
+
 
 namespace UnityEngine
 {
     public static class Debug
     {
+        // for testing
         internal static string lastLog;
         internal static string lastWarning;
         internal static string lastError;
 
-        public static void LogError(object message)
+        private static string MessageObjectToString(object message)
         {
             if (message == null)
-                lastError = "LogError: null (null message, maybe a format which is unsupported?)";
-            else if (message is string strMessage)
-                lastError = strMessage;
-            else
-                lastError = "LogError: NON-String OBJECT LOGGED";
-            Console.WriteLine(lastError);
+                return "null (null message, maybe a format which is unsupported?)";
+            if (message is string stringMessage)
+                return stringMessage;
+            if (message is int intMessage)
+                return intMessage.ToString();
+            if (message is short shortMessage)
+                return shortMessage.ToString();
+            if (message is float floatMessage)
+                return floatMessage.ToString();
+            if (message is double doubleMessage)
+                return doubleMessage.ToString();
+            if (message is Exception exc)
+                return string.Concat(exc.Message, "\n", exc.StackTrace);
+
+            return "Non-Trivially-Stringable OBJECT logged (Not supported in DOTS C#)";
         }
 
-        public static void LogWarning(string message)
+        [Conditional("DEBUG")]
+        private static void LogInternal(string message)
         {
-            lastWarning = message;
+#if DEBUG && !UNITY_WEBGL
+            PlayerConnectionLogger.Log(message);
+#endif
             Console.WriteLine(message);
         }
 
-        public static void Log(string message)
+        [Conditional("DEBUG")]
+        public static void Log(object message)
         {
-            lastLog = message;
-            Console.WriteLine(message);
+            lastLog = MessageObjectToString(message);
+            LogInternal(lastLog);
         }
 
-        public static void Log(int message) => Log(message.ToString());
-        public static void Log(float message) => Log(message.ToString());
+        [Conditional("DEBUG")]
+        public static void LogWarning(object message)
+        {
+            lastWarning = MessageObjectToString(message);
+            LogInternal(lastWarning);
+        }
 
+        [Conditional("DEBUG")]
+        public static void LogError(object message)
+        {
+            lastError = $"LogError: {MessageObjectToString(message)}";
+            LogInternal(lastError);
+        }
+
+        [Conditional("DEBUG")]
         public static void LogException(Exception exception)
         {
             lastLog = "Exception";
-            Console.WriteLine(exception.Message + "\n" + exception.StackTrace);
+            LogInternal(exception.Message + "\n" + exception.StackTrace);
         }
     }
 
@@ -93,6 +119,8 @@ namespace UnityEngine
         public static extern long Time_GetTicksMicrosecondsMonotonic();
 
         public static float time => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0f;
+
+        public static double timeAsDouble => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0;
     }
 
     [AttributeUsage(AttributeTargets.Field)]

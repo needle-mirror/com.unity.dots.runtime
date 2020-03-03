@@ -55,6 +55,8 @@ public static class Il2Cpp
         return new DistributionAndDeps() {Distribution = Il2CppFromSteve(), Deps = Il2CppDepsFromSteve()};
     });
 
+    private const string metadataFilePath = "Data/Metadata/global-metadata.dat";
+    
     private static IFileBundle Il2CppDependencies => _il2cppAndDeps.Value.Deps;
     public static IFileBundle Distribution => _il2cppAndDeps.Value.Distribution;
 
@@ -81,6 +83,11 @@ public static class Il2Cpp
         return stevedoreArtifact;
     }
 
+    private static WarningAndPolicy[] GetGccLikeWarningPolicies()
+    {
+        return new[] {new WarningAndPolicy("invalid-offsetof", WarningPolicy.Silent)};
+    }
+
     internal class Il2CppOutputProgram : NativeProgram
     {
         public Il2CppOutputProgram(string name) : base(name)
@@ -100,7 +107,7 @@ public static class Il2Cpp
                 .WithSubSystemType(SubSystemType.Console)
                 .WithEntryPoint("wWinMainCRTStartup")
             );
-            Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null, "FORCE_PINVOKE_INTERNAL=1");
+            Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null || c.Platform.Name == "IOS", "FORCE_PINVOKE_INTERNAL=1");
 
             this.DynamicLinkerSettingsForEmscripten().Add(c =>
                 c.WithShellFile(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_shell.html")));
@@ -108,10 +115,14 @@ public static class Il2Cpp
             Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
+            Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration != DotsConfiguration.Release, "IL2CPP_TINY_DEBUG_METADATA");
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithExceptions(true));
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithRTTI(true));
-            MsvcNativeProgramExtensions.CompilerSettingsForMsvc(this).Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
+            IncludeDirectories.Add(ManagedDebuggingIsEnabled, Distribution.Path.Combine("libil2cpp/pch"));
+            this.CompilerSettingsForMsvc().Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
             CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
+            this.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
+            NativeJobsPrebuiltLibrary.Add(this); // Only required for managed debugging
         }
 
 
@@ -126,6 +137,9 @@ public static class Il2Cpp
 
             // force pinvoke internal for static libraries
             staticLibs.ForEach(l => Defines.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, PinvokeInternalDefineFor(l)));
+
+            if (config.EnableManagedDebugging)
+                SupportFiles.Add(new DeployableFile(Il2CppTargetDirForAssembly(setupGame).Combine(metadataFilePath), new NPath(metadataFilePath)));
         }
 
         private string PinvokeInternalDefineFor(IDeployable staticLib)
@@ -143,13 +157,15 @@ public static class Il2Cpp
     
     public static NPath Il2CppTargetDirForAssembly(DotNetAssembly inputAssembly)
     {
-        return inputAssembly.Path.Parent.Combine(inputAssembly.Path.FileName + "-il2cpp-sources");
+        return inputAssembly.Path.Parent.Combine("il2cpp-src");
     }
 
     public static NPath[] SetupInvocation(DotNetAssembly inputAssembly, DotsRuntimeCSharpProgramConfiguration config)
     {
         var profile = "unitytiny";
         var il2CppTargetDir = Il2CppTargetDirForAssembly(inputAssembly);
+        var enableDevelopmentMode =
+            config.EnableUnityCollectionsChecks || config.DotsConfiguration != DotsConfiguration.Release;
 
         var args = new List<string>()
         {
@@ -173,8 +189,8 @@ public static class Il2Cpp
 
         if (config.EnableManagedDebugging)
             args.Add("--enable-debugger");
-        
-        if (config.EnableUnityCollectionsChecks)
+
+        if (enableDevelopmentMode)
             args.Add("--development-mode");
 
         var iarrdis = MoveExeToFront(inputAssembly.RecursiveRuntimeDependenciesIncludingSelf);
@@ -191,15 +207,20 @@ public static class Il2Cpp
             "GenericMethods.cpp",
             "Generics.cpp",
             "Il2CppGenericComDefinitions.cpp",
-            "ReversePInvokeWrappers.cpp",
+        };
+
+        var developmentModeExtraFileNames = new[]
+        {
+            "TinyMethods.cpp",
         };
 
         var nonDebuggerExtraFileNames = new[]
         {
             "TinyTypes.cpp",
             "StaticConstructors.cpp",
+            "ModuleInitializers.cpp",
             "StringLiterals.cpp",
-            "StaticInitialization.cpp"
+            "StaticInitialization.cpp",
         };
 
         var debuggerExtraFileNames = new[]
@@ -211,7 +232,6 @@ public static class Il2Cpp
             "Il2CppMetadataRegistration.c",
             "Il2CppMetadataUsage.c",
             "Il2CppTypeDefinitions.c",
-            "Il2CppAttributes.cpp",
             "Il2CppCodeRegistration.cpp",
             "Il2CppCompilerCalculateTypeValues.cpp",
             "Il2CppCompilerCalculateTypeValuesTable.cpp",
@@ -230,23 +250,26 @@ public static class Il2Cpp
             il2cppOutputFileNames = il2cppOutputFileNames.Concat(debuggerExtraFileNames);
             il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Debugger.c"));
             il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Codegen.c"));
+            il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Attr.cpp"));
         }
         else
         {
             il2cppOutputFileNames = il2cppOutputFileNames.Concat(nonDebuggerExtraFileNames);
         }
 
+        if (enableDevelopmentMode && !config.EnableManagedDebugging)
+            il2cppOutputFileNames = il2cppOutputFileNames.Concat(developmentModeExtraFileNames);
+
         var il2cppOutputFiles = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + ".cpp"))
             .Select(il2CppTargetDir.Combine).ToArray();
 
-        var il2cppInputs = Distribution.GetFileList("build")
+        var il2cppInputs = Distribution.GetFileList("build/deploy/net471")
             .Concat(iarrdis.SelectMany(a => a.Paths))
-            .Concat(new[] {Distribution.Path.Combine("libil2cpptiny", "libil2cpptiny.icalls")})
-            .Concat(new[] {Il2CppDependencies.GetFileList().First()});
+            .Concat(new[] {Distribution.Path.Combine("libil2cpptiny", "libil2cpptiny.icalls")});
 
         var finalOutputFiles = il2cppOutputFiles;
         if (config.EnableManagedDebugging)
-            finalOutputFiles = finalOutputFiles.Concat(new[] { il2CppTargetDir.Combine("Data/Metadata/global-metadata.dat") }).ToArray();
+            finalOutputFiles = finalOutputFiles.Concat(new[] {il2CppTargetDir.Combine(metadataFilePath)}).ToArray();
 
         Backend.Current.AddAction(
             "Il2Cpp",
@@ -260,9 +283,9 @@ public static class Il2Cpp
 
     public static NPath CopyIL2CPPMetadataFile(NPath destination, DotNetAssembly inputAssembly)
     {
-        var target = destination.Combine("Data/Metadata/global-metadata.dat");
+        var target = destination.Combine(metadataFilePath);
         CopyTool.Instance().Setup(target,
-            Il2CppTargetDirForAssembly(inputAssembly).Combine("Data", "Metadata", "global-metadata.dat"));
+            Il2CppTargetDirForAssembly(inputAssembly).Combine(metadataFilePath));
         return target;
     }
 
@@ -335,7 +358,8 @@ public static class Il2Cpp
 
                 "LIBIL2CPP_IS_IN_EXECUTABLE=1",
                 {c => c.ToolChain is VisualStudioToolchain, "NOMINMAX", "WIN32_THREADS", "IL2CPP_TARGET_WINDOWS=1"},
-                {c => c.CodeGen == CodeGen.Debug, "DEBUG", "IL2CPP_DEBUG"}
+                {c => c.CodeGen == CodeGen.Debug, "DEBUG", "IL2CPP_DEBUG"},
+                {c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration != DotsConfiguration.Release, "IL2CPP_TINY_DEBUG_METADATA"},
             },
             Libraries =
             {
@@ -394,7 +418,8 @@ public static class Il2Cpp
                 Distribution.Path.Combine("external/mono/mono/metadata"),
                 Distribution.Path.Combine("external/mono/metadata/private"),
                 Distribution.Path.Combine("libmono/config"),
-                Distribution.Path.Combine("libil2cpp/os/c-api")
+                Distribution.Path.Combine("libil2cpp/os/c-api"),
+                Distribution.Path.Combine("libil2cpp/pch"),
             });
 
             var MonoSourceDir = Distribution.Path.Combine("external/mono");
@@ -510,7 +535,9 @@ public static class Il2Cpp
         program.PublicDefines.Add("IL2CPP_TINY");
         program.PublicIncludeDirectories.Add(Distribution.Path.Combine("external").Combine("xxHash"));
         program.CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
-
+        
+        program.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
+        
         // Use Baselib headers and library code from the NativeJobs library.
         NativeJobsPrebuiltLibrary.Add(program);
 

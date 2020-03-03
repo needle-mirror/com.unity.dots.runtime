@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Unity.Entities.Runtime.Hashing;
 using Unity.Build;
 using Unity.Build.Internals;
-using Unity.Entities.Runtime.Hashing;
 using UnityEditor;
 using Object = UnityEngine.Object;
 
@@ -27,7 +27,7 @@ namespace Unity.Entities.Runtime.Build
 #if USE_INCREMENTAL_CONVERSION
         public TinyExportDriver(BuildContext context, DirectoryInfo exportDataRoot, World destinationWorld, BlobAssetStore blobAssetStore) : base(destinationWorld, GameObjectConversionUtility.ConversionFlags.AddEntityGUID, blobAssetStore)
         {
-            BuildSettings = BuildContextInternals.GetBuildSettings(context);
+            BuildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
             m_ExportDataRoot = exportDataRoot;
         }
 #else
@@ -64,6 +64,12 @@ namespace Unity.Entities.Runtime.Build
 
         public override Stream TryCreateAssetExportWriter(Object asset)
         {
+            if (!m_Items.ContainsKey(asset))
+            {
+                UnityEngine.Debug.LogError($"TinyExportDriver: Trying to create export writer for asset {asset}, but it was never exported");
+                return null;
+            }
+
             var item = m_Items[asset];
             if (item.Exported)
                 return null;

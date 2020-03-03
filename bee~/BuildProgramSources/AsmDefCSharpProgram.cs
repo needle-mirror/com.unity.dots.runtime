@@ -14,7 +14,8 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     string[] IncompatibleDotRuntimeAsmDefs =
     {
         "Unity.Properties",
-        "Unity.Properties.Reflection"
+        "Unity.Properties.Reflection",
+        "Unity.PerformanceTesting"
     };
 
     public AsmDefCSharpProgram(AsmDefDescription asmDefDescription)
@@ -24,13 +25,12 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     {
         AsmDefDescription = asmDefDescription;
 
-        var asmDefReferences = AsmDefDescription.References.Select(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor).ToList();
+        var asmDefReferences = AsmDefDescription.References.Select(asmDefDescription1 => BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(asmDefDescription1)).ToList();
+
         ReferencedPrograms = asmDefReferences.Where(r => !IncompatibleDotRuntimeAsmDefs.Contains(r.AsmDefDescription.Name)).ToArray();
 
-        var isTinyRoot = AsmDefDescription.NamedReferences.Contains("Unity.Tiny.Main")
-                         || asmDefDescription.Path.Parent.Files("*.project").Any();
-
-        var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") || asmDefDescription.Name.EndsWith(".Tests");
+        var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") ||
+                    asmDefDescription.Name.EndsWith(".Tests");
         
         Construct(asmDefDescription.Name, isExe);
 
@@ -48,11 +48,13 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
             return ReferencedPrograms;
         });
 
-        if (isTinyRoot || isExe)
+        if (AsmDefDescription.IsTinyRoot || isExe)
         {
             AsmDefCSharpProgramCustomizer.RunAllAddPlatformImplementationReferences(this);
         }
 
+        if (BuildProgram.UnityTinyBurst != null)
+            References.Add(BuildProgram.UnityTinyBurst);
         if (BuildProgram.ZeroJobs != null)
             References.Add(BuildProgram.ZeroJobs);
         if (BuildProgram.UnityLowLevel != null)
@@ -66,11 +68,14 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
             ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");
             References.Add(BuildProgram.NUnitLite);
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities")));
+            References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.Core")));
+            References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.UnityInstance")));
         }
         else if(IsILPostProcessorAssembly)
         {
             References.Add(BuildProgram.UnityCompilationPipeline);
             References.Add(StevedoreUnityCecil.Paths);
+            References.Add(Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"));
         }
     }
 

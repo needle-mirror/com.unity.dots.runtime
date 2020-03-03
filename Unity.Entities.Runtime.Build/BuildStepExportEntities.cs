@@ -3,21 +3,17 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
+using Unity.Build.Internals;
 using Unity.Scenes;
 using Unity.Scenes.Editor;
 using UnityEditor;
-using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(description = k_Description, category = "DOTS")]
-    internal class BuildStepExportEntities : BuildStep
+    [BuildStep(Name = "Export Entities", Description = "Exporting Entities", Category = "DOTS")]
+    sealed class BuildStepExportEntities : BuildStep
     {
-        const string k_Description = "Export Entities";
-
-        public override string Description => k_Description;
-
         public BlobAssetStore m_BlobAssetStore;
 
         public override Type[] RequiredComponents => new[]
@@ -29,7 +25,7 @@ namespace Unity.Entities.Runtime.Build
         public override BuildStepResult RunBuildStep(BuildContext context)
         {
             var manifest = context.BuildManifest;
-            var settings = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
+            var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
             var buildScenes = GetRequiredComponent<SceneList>(context);
 
             var exportedSceneGuids = new HashSet<Guid>();
@@ -42,13 +38,15 @@ namespace Unity.Entities.Runtime.Build
 
             void ExportSceneToFile(Scene scene, Guid guid)
             {
-                var outputFile = settings.DataDirectory.GetFile(guid.ToString("N"));
+                var config = BuildContextInternals.GetBuildConfiguration(context);
+                var dataDirectory = profile.StagingDirectory.Combine(config.name).Combine("Data");
+                var outputFile = dataDirectory.GetFile(guid.ToString("N"));
                 using (var exportWorld = new World("Export World"))
                 {
 #if USE_INCREMENTAL_CONVERSION
-                    var exportDriver = new TinyExportDriver(context, settings.DataDirectory, exportWorld, m_BlobAssetStore);
+                    var exportDriver = new TinyExportDriver(context, dataDirectory, exportWorld, m_BlobAssetStore);
 #else
-                    var exportDriver = new TinyExportDriver(context, settings.DataDirectory);
+                    var exportDriver = new TinyExportDriver(context, profile.DataDirectory);
 #endif
                     exportDriver.DestinationWorld = exportWorld;
                     exportDriver.SceneGUID = new Hash128(guid.ToString("N"));
@@ -69,13 +67,6 @@ namespace Unity.Entities.Runtime.Build
             {
                 using (var loadedSceneScope = new LoadedSceneScope(rootScenePath))
                 {
-                    var thisSceneGuid = new Guid(AssetDatabase.AssetPathToGUID(rootScenePath));
-                    if (exportedSceneGuids.Contains(thisSceneGuid))
-                        continue;
-
-                    ExportSceneToFile(loadedSceneScope.ProjectScene, thisSceneGuid);
-                    exportedSceneGuids.Add(thisSceneGuid);
-
                     var thisSceneSubScenes = loadedSceneScope.ProjectScene.GetRootGameObjects()
                         .Select(go => go.GetComponent<SubScene>())
                         .Where(g => g != null && g);

@@ -26,8 +26,7 @@ static class TypeRegistrationTool
             {
                 ReferenceAssemblies471.Paths,
                 StevedoreUnityCecil.Paths,
-                Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.Common.dll"),
-                Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.dll"),
+                Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"),
             },
             LanguageVersion = "7.3",
             ProjectFilePath = "Unity.Entities.BuildUtilities.csproj"
@@ -58,8 +57,7 @@ static class TypeRegistrationTool
             EntityBuildUtils,
             StevedoreUnityCecil.Paths,
             StevedoreNewtonsoftJson.Paths,
-            Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.Common.dll"),
-            Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.IL2CPP.dll"),
+            Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"),
         },
         LanguageVersion = "7.3",
         ProjectFilePath = "TypeRegGen.csproj"
@@ -89,6 +87,7 @@ static class TypeRegistrationTool
             targetDirectory.MakeAbsolute().QuoteForProcessStart(),
             dotsConfig.NativeProgramConfiguration.ToolChain.Architecture.Bits.ToString(),
             dotsConfig.ScriptingBackend == ScriptingBackend.Dotnet ? "DOTSDotNet" : "DOTSNative",
+            dotsConfig.UseBurst ? "Bursted" : "Unbursted",
             dotsConfig.Identifier.Contains("release") ? "release" : "debug", // We check for 'release' so we can generate 'debug' info for both debug and develop configs
             inputAssemblies.OrderByDependencies().Select(p => p.Path.MakeAbsolute().QuoteForProcessStart())
         }.ToArray();
