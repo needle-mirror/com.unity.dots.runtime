@@ -4,6 +4,17 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2020-04-09
+* Added Player Connection support allowing a DOTS Runtime application to interact with Unity Editor.
+* Added Profiler support allowing DOTS Runtime to interact with Unity Editor profiler and integrate profiling into builds.
+* Removed support for IJobForEach from DOTS-Runtime.
+* Added `Generate DOTS C# Solution` option to the editor's Assets toolbar. This window allows DOTS Runtime users to select which buildconfigurations to include their DOTS Runtime solution explicitly, rather than the solution only containing whatever was built recently.
+* The `DotsRuntimeBuildProfile.RootAssembly` field has been moved into a new `IBuildComponent` called `DotsRuntimeRootAssembly` which is required for building BuildConfiguration assets using the "Default DOTS Runtime Pipeline". This separation is made to allow build configurations to more easily share settings across multiple Root Assemblies.
+* GUID references are now supported in asmdefs.
+* The `DotsRuntimeBuildProfile.UseBurst` setting has been moved to the `DotsRuntimeBurstSettings` build component.
+* The `DotsRuntimeScriptingDefines` component has been replaced by the `DotsRuntimeScriptingSettings` build component. This replacement is made to allow for scripting settings to all live in a common location.
+* Fixes an issue where old build artifacts could cause builds to break after updating `com.unity.tiny` if build configuration processing code has been changed.
+
 ## [0.23.0] - 2020-03-03
 * Added window to select what configs to generate the dots solution with.
 * Stopped requiring a reference to Unity.Tiny.Main and Unity.Tiny.EntryPoint for a root assembly to work. Implicitly adds those if an entry point is not referenced. 

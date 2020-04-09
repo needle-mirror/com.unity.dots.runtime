@@ -18,8 +18,9 @@ namespace Unity.Entities.Runtime.Build
 {
     public class GenerateDotsSolutionWindow : EditorWindow
     {
-        const string k_WindowTitle = "Generate DOTS Solution";
+        const string k_WindowTitle = "Generate DOTS C# Solution";
         static HashSet<BuildConfiguration> s_BuildConfigurations;
+        static HashSet<string> s_settingsFiles;
         TreeViewState m_TreeViewState;
         GenerateDotsSolutionView m_GenerateDotsSolutionView;
 
@@ -39,6 +40,19 @@ namespace Unity.Entities.Runtime.Build
             }
         }
 
+        static void RebuildAlreadyGeneratedConfigList()
+        {
+            s_settingsFiles = new HashSet<string>();
+            var settingsDirectory = GenerateDotsSolutionView.BeeRootDirectory.Combine("settings").ToString();
+            if (Directory.Exists(settingsDirectory))
+            {
+                foreach (var path in Directory.GetFiles(settingsDirectory))
+                {
+                    s_settingsFiles.Add(Path.GetFileNameWithoutExtension(path));
+                }
+            }
+        }
+        
         void OnEnable()
         {
             // Check whether there is already a serialized view state (state 
@@ -47,6 +61,7 @@ namespace Unity.Entities.Runtime.Build
                 m_TreeViewState = new TreeViewState();
 
             RebuildGuidList();
+            RebuildAlreadyGeneratedConfigList();
 
             m_GenerateDotsSolutionView = new GenerateDotsSolutionView(m_TreeViewState);
             GenerateDotsSolutionView.ShouldReload = true;
@@ -54,11 +69,19 @@ namespace Unity.Entities.Runtime.Build
 
         void OnGUI()
         {
+            if (m_GenerateDotsSolutionView == null)
+                return;
+            
             var buttonsRect = EditorGUILayout.BeginVertical();
             {
                 EditorGUI.BeginDisabledGroup(!m_GenerateDotsSolutionView.AnyConfigsSelected());
                 if (GUILayout.Button("Generate Solution"))
                     m_GenerateDotsSolutionView.GenerateSolution();
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUI.BeginDisabledGroup(!GetSolutionPath().Exists());
+                if (GUILayout.Button("Open Solution"))
+                    OpenSolution();
                 EditorGUI.EndDisabledGroup();
 
                 EditorGUILayout.BeginVertical();
@@ -70,6 +93,12 @@ namespace Unity.Entities.Runtime.Build
 
                         if (GUILayout.Button("Select None"))
                             m_GenerateDotsSolutionView.UnselectAllConfigs();
+                        
+                        if (GUILayout.Button("Expand All"))
+                            m_GenerateDotsSolutionView.ExpandAll();
+
+                        if (GUILayout.Button("Collapse All"))
+                            m_GenerateDotsSolutionView.CollapseAll();
                     }
                     EditorGUILayout.EndHorizontal();
                 }
@@ -86,20 +115,57 @@ namespace Unity.Entities.Runtime.Build
             EditorGUILayout.EndVertical();
         }
 
-        [MenuItem("Assets/Generate DOTS Solution...")]
+        [MenuItem("Assets/Generate DOTS C# Solution...", priority = 10000)]
         static void ShowWindow()
         {
-            if (Unsupported.IsDeveloperMode())
+            // Get existing open window or if none, make a new one
+            var window = GetWindow<GenerateDotsSolutionWindow>();
+            window.titleContent = new GUIContent(k_WindowTitle);
+            window.minSize = new Vector2(750, 600);
+            window.Show();
+        }
+        
+        [MenuItem("Assets/Open DOTS C# Solution", priority = 10001, validate = false)]
+        static void GenerateAndOpenSolution()
+        {
+            GenerateDotsSolutionView.RunBeeProjectFiles();
+            OpenSolution();
+        }
+        
+        // The editor will call this function before rendering the "Open DOTS C# Solution" option
+        // and will enable/disable this option based on the return result of this function
+        [MenuItem("Assets/Open DOTS C# Solution", priority = 10001, validate = true)]
+        static bool GenerateAndOpenSolutionValidation()
+        {
+            return GetSolutionPath().Exists();
+        }
+
+        static NPath GetSolutionPath()
+        {
+            var projectPath = new NPath(UnityEngine.Application.dataPath).Parent;
+            var slnPath = projectPath.Combine(projectPath.FileName + "-Dots.sln");
+            return slnPath;
+        }
+        static void OpenSolution()
+        {
+            var scriptEditor = new NPath(ScriptEditorUtility.GetExternalScriptEditor());
+            var sln = GetSolutionPath().InQuotes();
+#if UNITY_EDITOR_OSX
+                    var pi = new ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/open",
+                        Arguments = $"-a {scriptEditor.InQuotes()} {sln}",
+                        UseShellExecute = false
+                    };
+#else
+            var pi = new ProcessStartInfo
             {
-                // Get existing open window or if none, make a new one
-                var window = GetWindow<GenerateDotsSolutionWindow>();
-                window.titleContent = new GUIContent(k_WindowTitle);
-                window.Show();
-            }
-            else
-            {
-                GenerateDotsSolutionView.RunBeeProjectFiles();
-            }
+                FileName = scriptEditor.ToString(),
+                Arguments = sln,
+            };
+#endif
+            var proc = new Process {StartInfo = pi};
+            proc.Start();
         }
 
         class GenerateDotsSolutionView : TreeView
@@ -107,12 +173,13 @@ namespace Unity.Entities.Runtime.Build
             enum Column
             {
                 IncludeInSolutionToggle,
-                BuildAssetName,
                 RootGameAssembly,
-                Target
+                Target,
+                Configuration,
+                BuildAssetName,
             }
 
-            class GenerateDotsSolutionViewItem : TreeViewItem
+            class BuildConfigViewItem : TreeViewItem
             {
                 class BuildConfigurationAssetPostProcessor : AssetPostprocessor
                 {
@@ -136,16 +203,20 @@ namespace Unity.Entities.Runtime.Build
                     }
                 }
 
-                public GenerateDotsSolutionViewItem(BuildConfiguration buildConfig, DotsRuntimeBuildProfile profile)
+                public BuildConfigViewItem(BuildConfiguration buildConfig)
                 {
                     BuildConfiguration = buildConfig;
-                    BuildProfile = profile;
+                    BuildProfile = buildConfig.GetComponent<DotsRuntimeBuildProfile>();
+                    RootAssembly = buildConfig.GetComponent<DotsRuntimeRootAssembly>();
+                    var settingsFileName = RootAssembly.MakeBeeTargetName(buildConfig);
+                    IncludeInSolution = s_settingsFiles.Contains(settingsFileName);
                 }
 
                 public BuildConfiguration BuildConfiguration;
                 public DotsRuntimeBuildProfile BuildProfile;
+                public DotsRuntimeRootAssembly RootAssembly;
                 public string BuildAssetName => BuildConfiguration != null ? BuildConfiguration.name : "";
-                public string RootGameAssembly => BuildProfile != null ? BuildProfile.RootAssembly.name : "";
+                public string RootGameAssembly => BuildProfile != null ? RootAssembly.RootAssembly.name : "";
                 public string Target => BuildProfile != null ? BuildProfile.Target.DisplayName : "";
                 public bool IncludeInSolution { get; set; }
 
@@ -153,10 +224,24 @@ namespace Unity.Entities.Runtime.Build
                 public override int id => BuildConfiguration.GetHashCode() * 7919 ^ BuildProfile.GetHashCode();
                 public override int depth => parent?.depth + 1 ?? 0;
             }
+            
+            class RootAssemblyViewItem : TreeViewItem
+            {
+                public RootAssemblyViewItem(RootAssemblyInfo info)
+                {
+                    BuildTargetInfo = info;
+                }
+
+                public RootAssemblyInfo BuildTargetInfo;
+                public string ProjectName => BuildTargetInfo != null ? BuildTargetInfo.ProjectName : "";
+                public bool IncludeAllInSolution { get; set; }
+                public override string displayName => null;
+                public override int id => BuildTargetInfo.GetHashCode();
+                public override int depth => parent?.depth + 1 ?? 0;
+            }
 
             readonly MultiColumnHeaderState m_MultiColumnHeaderState;
-            public static DirectoryInfo BeeRootDirectory { get; set; } = new DotsRuntimeBuildProfile().BeeRootDirectory;
-            
+            public static DirectoryInfo BeeRootDirectory { get; set; } = DotsRuntimeRootAssembly.BeeRootDirectory;            
             internal static bool ShouldReload { get; set; }
 
             public GenerateDotsSolutionView(TreeViewState state)
@@ -190,32 +275,49 @@ namespace Unity.Entities.Runtime.Build
 
             void SortColumn()
             {
+                var expandedIds = state.expandedIDs;
+                ExpandAll();
+                
                 var sortedColumns = multiColumnHeader.state.sortedColumns;
-
                 if (sortedColumns.Length == 0 || rootItem == null)
                     return;
 
-                var items = rootItem.children.Cast<GenerateDotsSolutionViewItem>();
                 var columnIndex = multiColumnHeader.sortedColumnIndex;
                 var column = (Column)columnIndex;
-                var isAscending = multiColumnHeader.IsSortedAscending(columnIndex);
-                switch (column)
+                if (column == Column.RootGameAssembly)
                 {
-                    case Column.IncludeInSolutionToggle:
-                        items = isAscending ? items.OrderBy(item => item.IncludeInSolution) : items.OrderByDescending(item => item.IncludeInSolution);
-                        break;
-                    case Column.RootGameAssembly:
-                        items = isAscending ? items.OrderBy(item => item.RootGameAssembly) : items.OrderByDescending(item => item.RootGameAssembly);
-                        break;
-                    case Column.Target:
-                        items = isAscending ? items.OrderBy(item => item.Target) : items.OrderByDescending(item => item.Target);
-                        break;
-                    case Column.BuildAssetName:
-                        items = isAscending ? items.OrderBy(item => item.BuildAssetName) : items.OrderByDescending(item => item.BuildAssetName);
-                        break;
-                };
-
-                rootItem.children = items.Cast<TreeViewItem>().ToList();
+                    var items = rootItem.children.Cast<RootAssemblyViewItem>();
+                    var isAscending = multiColumnHeader.IsSortedAscending(columnIndex);
+                    items = isAscending ? items.OrderBy(item => item.ProjectName) : items.OrderByDescending(item => item.ProjectName);
+                    rootItem.children = items.Cast<TreeViewItem>().ToList();
+                }
+                else
+                {
+                    foreach (var child in rootItem.children)
+                    {
+                        var items = child.children.Cast<BuildConfigViewItem>();
+                        var isAscending = multiColumnHeader.IsSortedAscending(columnIndex);
+                        switch (column)
+                        {
+                            case Column.IncludeInSolutionToggle:
+                                items = isAscending ? items.OrderBy(item => item.IncludeInSolution) : items.OrderByDescending(item => item.IncludeInSolution);
+                                break;
+                            case Column.Target:
+                                items = isAscending ? items.OrderBy(item => item.Target) : items.OrderByDescending(item => item.Target);
+                                break;
+                            case Column.Configuration:
+                                items = isAscending ? items.OrderBy(item => item.BuildProfile.Configuration) : items.OrderByDescending(item => item.BuildProfile.Configuration);
+                                break;
+                            case Column.BuildAssetName:
+                                items = isAscending ? items.OrderBy(item => item.BuildAssetName) : items.OrderByDescending(item => item.BuildAssetName);
+                                break;
+                        }
+                        child.children = items.Cast<TreeViewItem>().ToList();
+                    }
+                }
+                
+                CollapseAll();
+                SetExpanded(expandedIds);
             }
 
             static void TreeToList(TreeViewItem root, IList<TreeViewItem> result)
@@ -266,22 +368,12 @@ namespace Unity.Entities.Runtime.Build
                     },
                     new MultiColumnHeaderState.Column
                     {
-                        headerContent = new GUIContent("Build Configuration Asset", "Build Configurations Assets in project 'blah'"),
-                        headerTextAlignment = TextAlignment.Center,
-                        sortedAscending = true,
-                        sortingArrowAlignment = TextAlignment.Right,
-                        width = 160,
-                        minWidth = 160,
-                        autoResize = true
-                    },
-                    new MultiColumnHeaderState.Column
-                    {
                         headerContent = new GUIContent("Root Game Assembly", "Game to be built as specified by the Build Configuration Asset"),
                         headerTextAlignment = TextAlignment.Center,
                         sortedAscending = true,
                         sortingArrowAlignment = TextAlignment.Right,
-                        width = 140,
-                        minWidth = 140,
+                        width = 180,
+                        minWidth = 180,
                         autoResize = true
                     },
                     new MultiColumnHeaderState.Column
@@ -293,7 +385,27 @@ namespace Unity.Entities.Runtime.Build
                         width = 110,
                         minWidth = 110,
                         autoResize = true
-                    }
+                    },
+                    new MultiColumnHeaderState.Column
+                    {
+                        headerContent = new GUIContent("Configuration", "Configuration the Root Game Assembly is to be built with"),
+                        headerTextAlignment = TextAlignment.Center,
+                        sortedAscending = true,
+                        sortingArrowAlignment = TextAlignment.Right,
+                        width = 110,
+                        minWidth = 110,
+                        autoResize = true
+                    },
+                    new MultiColumnHeaderState.Column
+                    {
+                        headerContent = new GUIContent("Build Configuration Asset", "Build Configurations Assets in project 'blah'"),
+                        headerTextAlignment = TextAlignment.Center,
+                        sortedAscending = true,
+                        sortingArrowAlignment = TextAlignment.Right,
+                        width = 200,
+                        minWidth = 200,
+                        autoResize = true
+                    },
                 };
 
                 // Number of columns should match number of enum values: You probably forgot to update one of them
@@ -308,10 +420,18 @@ namespace Unity.Entities.Runtime.Build
             {
                 if (ShouldReload)
                 {
+                    var expandedIds = state.expandedIDs;
+                    ExpandAll();
+                    
                     RebuildGuidList();
+                    RebuildAlreadyGeneratedConfigList(); 
                     Reload();
                     OnSortingChanged(multiColumnHeader);
                     ShouldReload = false;
+                    
+                    CollapseAll();
+                    SetExpanded(expandedIds);
+
                 }
 
                 base.OnGUI(rect);
@@ -319,9 +439,13 @@ namespace Unity.Entities.Runtime.Build
 
             protected override float GetCustomRowHeight(int row, TreeViewItem item)
             {
-                if (item is GenerateDotsSolutionViewItem)
+                if (item is BuildConfigViewItem)
                 {
                     return 22.0f;
+                }
+                if (item is RootAssemblyViewItem)
+                {
+                    return 24.0f;
                 }
 
                 return 18.0f;
@@ -331,10 +455,17 @@ namespace Unity.Entities.Runtime.Build
             {
                 switch (args.item)
                 {
-                    case GenerateDotsSolutionViewItem sceneRefItem:
+                    case BuildConfigViewItem buildConfigItem:
                         for (int i = 0; i < args.GetNumVisibleColumns(); ++i)
                         {
-                            DrawRowCell(args.GetCellRect(i), (Column)args.GetColumn(i), sceneRefItem, args);
+                            DrawRowCell(args.GetCellRect(i), (Column)args.GetColumn(i), buildConfigItem, args);
+                        }
+
+                        break;
+                    case RootAssemblyViewItem projectInfoItem:
+                        for (int i = 0; i < args.GetNumVisibleColumns(); ++i)
+                        {
+                            DrawRowCell(args.GetCellRect(i), (Column)args.GetColumn(i), projectInfoItem, args);
                         }
 
                         break;
@@ -343,7 +474,7 @@ namespace Unity.Entities.Runtime.Build
                 base.RowGUI(args);
             }
 
-            void DrawRowCell(Rect rect, Column column, GenerateDotsSolutionViewItem item, RowGUIArgs args)
+            void DrawRowCell(Rect rect, Column column, BuildConfigViewItem item, RowGUIArgs args)
             {
                 CenterRectUsingSingleLineHeight(ref rect);
 
@@ -365,71 +496,168 @@ namespace Unity.Entities.Runtime.Build
 
                         break;
                     }
-                    case Column.BuildAssetName:
-                    {
-                        DefaultGUI.Label(rect, item.BuildAssetName, args.selected, args.focused);
-                        break;
-                    }
-                    case Column.RootGameAssembly:
-                    {
-                        DefaultGUI.Label(rect, item.RootGameAssembly, args.selected, args.focused);
-                        break;
-                    }
                     case Column.Target:
                     {
                         DefaultGUI.Label(rect, item.Target, args.selected, args.focused);
                         break;
                     }
+                    case Column.Configuration:
+                    {
+                        DefaultGUI.Label(rect, item.BuildProfile.Configuration.ToString(), args.selected, args.focused);
+                        break;
+                    }
+                    case Column.BuildAssetName:
+                    {
+                        DefaultGUI.Label(rect, item.BuildAssetName, args.selected, args.focused);
+                        break;
+                    }
+                }
+            }
+            
+            void DrawRowCell(Rect rect, Column column, RootAssemblyViewItem viewItem, RowGUIArgs args)
+            {
+                CenterRectUsingSingleLineHeight(ref rect);
+
+                switch (column)
+                {
+                    case Column.IncludeInSolutionToggle:
+                    {
+                        var toggleRect = rect;
+                        int toggleWidth = 20;
+                        toggleRect.x += rect.width * 0.5f - toggleWidth * 0.5f;
+
+                        bool toggleVal = EditorGUI.Toggle(toggleRect, viewItem.IncludeAllInSolution);
+                        if (toggleVal != viewItem.IncludeAllInSolution)
+                        {
+                            viewItem.IncludeAllInSolution = toggleVal;
+                            
+                            foreach(var child in args.item.children)
+                            {
+                                var buildConfigViewItem = child as BuildConfigViewItem;
+                                if (buildConfigViewItem != null)
+                                    buildConfigViewItem.IncludeInSolution = toggleVal;
+                            }
+                            
+                            Repaint();
+                        }
+
+                        break;
+                    }
+                    case Column.RootGameAssembly:
+                    {
+                        DefaultGUI.Label(rect, viewItem.ProjectName, args.selected, args.focused);
+                        break;
+                    }
                 }
             }
 
+            class RootAssemblyInfo
+            {
+                public string ProjectName;
+                public RootAssemblyInfo(string projectName)
+                {
+                    ProjectName = projectName;
+                }
+
+                public override bool Equals(object obj)
+                {
+                    if (ReferenceEquals(null, obj)) return false;
+                    if (ReferenceEquals(this, obj)) return true;
+                    if (obj.GetType() != typeof (RootAssemblyInfo)) return false;
+                    
+                    return ((RootAssemblyInfo) obj).ProjectName == ProjectName;
+                }
+
+                public override int GetHashCode()
+                {
+                    return ProjectName.GetHashCode();
+                }
+            }
+            
             protected override TreeViewItem BuildRoot()
             {
+                var idsToExpand = new List<int>();
                 var root = new TreeViewItem { id = int.MaxValue, depth = -1, displayName = "Root" };
 
-                foreach (var buildConfig in s_BuildConfigurations)
+                List<BuildConfiguration> buildConfigurations = new List<BuildConfiguration>();
+                buildConfigurations.AddRange(s_BuildConfigurations);
+#if DOTS_TEST_RUNNER
+                buildConfigurations.AddRange(GetTestBuildConfigs());
+#endif
+                
+                Dictionary<RootAssemblyInfo, List<BuildConfiguration>> configMap = new Dictionary<RootAssemblyInfo, List<BuildConfiguration>>(); 
+                foreach (var buildConfig in buildConfigurations)
                 {
-                    if (buildConfig.TryGetComponent(typeof(DotsRuntimeBuildProfile), out var buildComponent))
+                    bool hasRequiredComponents = true;
+
+                    hasRequiredComponents &= buildConfig.TryGetComponent(typeof(DotsRuntimeBuildProfile), out var buildProfile);
+                    hasRequiredComponents &= buildConfig.TryGetComponent(typeof(DotsRuntimeRootAssembly), out var buildTarget);
+                    if (hasRequiredComponents)
                     {
-                        if (buildComponent is DotsRuntimeBuildProfile profile && profile.RootAssembly != null && profile.Target.CanBuild)
+                        var dotsrtBuildProfile = (DotsRuntimeBuildProfile) buildProfile;
+                        var dotsrtRootAssembly = (DotsRuntimeRootAssembly) buildTarget;
+
+                        if (dotsrtBuildProfile.Target.CanBuild)
                         {
-                            root.AddChild(new GenerateDotsSolutionViewItem(buildConfig, profile));
+                            var rootAssemblyInfo = new RootAssemblyInfo(dotsrtRootAssembly.ProjectName);
+                            if (!configMap.TryGetValue(rootAssemblyInfo, out var configList))
+                            {
+                                configList = new List<BuildConfiguration>();
+                                configMap.Add(rootAssemblyInfo, configList);
+                            }
+                            configList.Add(buildConfig);
                         }
                     }
                 }
-                  
-#if DOTS_TEST_RUNNER
-                var testItems = GetTestItems();
-                foreach (var item in testItems)
+                
+                foreach (var info in configMap.Keys)
                 {
-                    root.AddChild(item);
-                }
-#endif
+                    var projectViewItem = new RootAssemblyViewItem(info);
 
+                    var configList = configMap[info];
+                    if (configList.Count > 0)
+                    {
+                        root.AddChild(projectViewItem);
+                        bool includeAllInSolution = true;
+                        bool expandParent = false;
+                        foreach (var buildConfig in configList)
+                        {
+                            var buildConfigViewItem = new BuildConfigViewItem(buildConfig);
+                            includeAllInSolution &= buildConfigViewItem.IncludeInSolution;
+                            expandParent |= buildConfigViewItem.IncludeInSolution;
+                            
+                            projectViewItem.AddChild(buildConfigViewItem);
+                        }
+
+                        projectViewItem.IncludeAllInSolution = includeAllInSolution;
+                        if (expandParent)
+                            idsToExpand.Add(projectViewItem.id);
+                    }
+                }
+                
                 if (!root.hasChildren)
                 {
                     root.AddChild(new TreeViewItem(0, 0, "No BuildConfiguration Assets Found in Project."));
                 }
 
                 SetupDepthsFromParentsAndChildren(root);
+
+                SetExpanded(idsToExpand);
+                
                 return root;
             }
 
 #if DOTS_TEST_RUNNER
-            GenerateDotsSolutionViewItem[] GetTestItems()
+            List<BuildConfiguration> GetTestBuildConfigs()
             {
-                
-                List<GenerateDotsSolutionViewItem> TestViewItems = new List<GenerateDotsSolutionViewItem>();
+                var testBuildConfigs = new List<BuildConfiguration>();
                 var testFinder = new TestTargetFinder();
                 testFinder.RetrieveUnitTests();
                 testFinder.RetrieveMultithreadingTests();
                 foreach (var test in testFinder.Tests)
-                {
-                   var bc = DotsTestRunner.GenerateBuildConfiguration(test);
-                   var profile = bc.GetComponent<DotsRuntimeBuildProfile>();
-                   TestViewItems.Add(new GenerateDotsSolutionViewItem(bc, profile)); 
-                }
-                return TestViewItems.ToArray();
+                    testBuildConfigs.Add(DotsTestRunner.GenerateBuildConfiguration(test));
+
+                return testBuildConfigs;
             }
 #endif
             
@@ -455,38 +683,63 @@ namespace Unity.Entities.Runtime.Build
 
                 foreach (var item in GetSelection()
                     .Select(id => FindItem(id, rootItem))
-                    .OfType<GenerateDotsSolutionViewItem>())
+                    .OfType<BuildConfigViewItem>())
                 {
                     item.IncludeInSolution = !item.IncludeInSolution;
                 }
             }
 
+            protected override void SingleClickedItem(int id)
+            {
+                var item = FindItem(id, rootItem);
+                switch (item)
+                {
+                    case BuildConfigViewItem viewItem:
+                        Selection.activeObject = viewItem.BuildConfiguration;
+                        break;
+                }
+            }
+            
             protected override void DoubleClickedItem(int id)
             {
                 var item = FindItem(id, rootItem);
                 switch (item)
                 {
-                    case GenerateDotsSolutionViewItem viewItem:
-                        Selection.activeObject = viewItem.BuildConfiguration;
+                    case RootAssemblyViewItem viewItem:
+                    {
+                        var expandedIds = new List<int>();
+                        expandedIds.AddRange(GetExpanded());
+                        
+                        if (!IsExpanded(viewItem.id))
+                            expandedIds.Add(viewItem.id);
+                        else
+                            expandedIds.Remove(viewItem.id);
+                        
+                        SetExpanded(expandedIds);
                         break;
+                    }
                 }
             }
 
             internal void SelectAllConfigs()
             {
-                foreach (var item in GetRows().OfType<GenerateDotsSolutionViewItem>())
+                foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
+                    item.IncludeAllInSolution = true;                
+                foreach (var item in GetRows().OfType<BuildConfigViewItem>())
                     item.IncludeInSolution = true;
             }
 
             internal void UnselectAllConfigs()
             {
-                foreach (var item in GetRows().OfType<GenerateDotsSolutionViewItem>())
+                foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
+                    item.IncludeAllInSolution = false;
+                foreach (var item in GetRows().OfType<BuildConfigViewItem>())
                     item.IncludeInSolution = false;
             }
 
             internal bool AnyConfigsSelected()
             {
-                return GetRows().OfType<GenerateDotsSolutionViewItem>().Any(item => item.IncludeInSolution);
+                return GetRows().OfType<BuildConfigViewItem>().Any(item => item.IncludeInSolution);
             }
 
             internal void GenerateSolution()
@@ -498,17 +751,20 @@ namespace Unity.Entities.Runtime.Build
                         p.hideFlags = HideFlags.HideAndDontSave;
                     });
                     
-                    //uncomment this line when we have tests in the sln as well
                     var settingsDirectory = BeeRootDirectory.Combine("settings").ToString();
                     if (Directory.Exists(settingsDirectory))
                         Directory.Delete(settingsDirectory, true);
-                    foreach(var project in GetRows().OfType<GenerateDotsSolutionViewItem>().Where(item => item.IncludeInSolution))
+                    
+                    foreach(var project in GetRows().OfType<BuildConfigViewItem>().Where(item => item.IncludeInSolution))
                     {
                         progress.Title =$"Generating '{project.BuildAssetName}'";
 
-                        var buildPipeline = project.BuildConfiguration.GetComponent<DotsRuntimeBuildProfile>()
-                            .Pipeline;
-                        
+#if UNITY_2020_1_OR_NEWER
+                        var buildPipeline = project.BuildConfiguration.GetComponent<DotsRuntimeBuildProfile>().Pipeline.asset;
+#else
+                        var buildPipeline = project.BuildConfiguration.GetComponent<DotsRuntimeBuildProfile>().Pipeline;
+#endif
+
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities()))
                             pipeline.BuildSteps.Add(new BuildStepExportEntities());
                         
@@ -534,7 +790,7 @@ namespace Unity.Entities.Runtime.Build
                     BuildProgramDataFileWriter.WriteAll(BeeRootDirectory.FullName);
                 }
 
-                var result = BeeTools.Run("ProjectFiles", BeeRootDirectory, progress);
+                var result = BeeTools.Run("ProjectFiles -f", BeeRootDirectory, progress);
                 if (!result.Succeeded)
                 {
                     UnityEngine.Debug.LogError($"{k_WindowTitle} failed.\n{result.Error}");
@@ -543,26 +799,6 @@ namespace Unity.Entities.Runtime.Build
                     return;
                 }
 
-                var scriptEditor = new NPath(ScriptEditorUtility.GetExternalScriptEditor());
-                var projectPath = new NPath(UnityEngine.Application.dataPath).Parent;
-                var sln = projectPath.Combine(projectPath.FileName + "-Dots.sln").InQuotes();
-#if UNITY_EDITOR_OSX
-                    var pi = new ProcessStartInfo
-                    {
-                        FileName = "/usr/bin/open",
-                        Arguments = $"-a {scriptEditor.InQuotes()} {sln}",
-                        UseShellExecute = false
-                    };
-#else
-                var pi = new ProcessStartInfo
-                {
-                    FileName = scriptEditor.ToString(),
-                    Arguments = sln,
-                };
-#endif
-                var proc = new Process {StartInfo = pi};
-                proc.Start();
-                
                 if (ownProgress)
                     progress.Dispose();
             }

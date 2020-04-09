@@ -13,6 +13,7 @@ namespace Unity.Entities.Runtime.Build
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile),
+            typeof(DotsRuntimeRootAssembly),
             typeof(SceneList)
         };
 
@@ -23,8 +24,11 @@ namespace Unity.Entities.Runtime.Build
 
         void WriteDebugFile(BuildContext context, BuildManifest manifest, DotsRuntimeBuildProfile profile)
         {
-            var debugFile =
-                new NPath(this.GetOutputBuildDirectory(context)).Combine("Logs/SceneExportLog.txt");
+            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
+            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
+            var targetName = rootAssembly.MakeBeeTargetName(buildConfiguration);
+            var outputDir = BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName);
+            var debugFile = new NPath(outputDir).Combine("Logs/SceneExportLog.txt");
             var debugAssets = manifest.Assets.OrderBy(x => x.Value)
                 .Select(x => $"{x.Key.ToString("N")} = {x.Value}").ToList();
 
@@ -50,7 +54,7 @@ namespace Unity.Entities.Runtime.Build
                     //Verify if an exported type is included in the output, if not print error message
                     foreach(TypeManager.TypeInfo exportedType in typesToWrite)
                     {
-                        if (!profile.TypeCache.HasType(exportedType.Type))
+                        if (!rootAssembly.TypeCache.HasType(exportedType.Type))
                             Debug.LogError($"The {exportedType.Type.Name} component is defined in the {exportedType.Type.Assembly.GetName().Name} assembly, but that assembly is not referenced by the current build configuration. Either add it as a reference, or ensure that the conversion process that is adding that component does not run.");
                     }
                     debugLines.Add($"::Exported Types (by stable hash)::");
@@ -75,10 +79,12 @@ namespace Unity.Entities.Runtime.Build
         public override BuildStepResult RunBuildStep(BuildContext context)
         {
             var manifest = context.BuildManifest;
+            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
+            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
+            var targetName = rootAssembly.MakeBeeTargetName(buildConfiguration);
             var scenes = GetRequiredComponent<SceneList>(context);
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
-            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
 
             using (var loadedSceneScope = new LoadedSceneScope(firstScene))
             {
@@ -102,8 +108,7 @@ namespace Unity.Entities.Runtime.Build
                     configSystemGroup.Update();
 
                     // Export configuration scene
-                    var config = BuildContextInternals.GetBuildConfiguration(context);
-                    var outputFile = profile.StagingDirectory.Combine(config.name)
+                    var outputFile = rootAssembly.StagingDirectory.Combine(targetName)
                         .Combine("Data")
                         .GetFile(tmpWorld.Name);
                     context.GetOrCreateValue<WorldExportTypeTracker>()?.AddTypesFromWorld(tmpWorld);

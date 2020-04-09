@@ -18,18 +18,7 @@ public class AsmRefDescription
         Json = JObject.Parse(path.ReadAllText());
     }
 
-    public string Reference
-    {
-        get
-        {
-            var target = Json["reference"].Value<string>();
-            if (target.StartsWith("GUID:"))
-            {
-                target = AsmDefConfigFile.GuidsToAsmDefNames[target.Substring(5)];
-            }
-            return target;
-        }
-    }
+    public string Reference => AsmDefConfigFile.GetRealAsmDefName(Json["reference"].Value<string>());
 }
 
 
@@ -37,8 +26,8 @@ public class AsmDefDescription
 {
     public NPath Path { get; }
     public string PackageSource { get; }
-    private JObject Json;
-    
+    internal JObject Json;
+
     public AsmDefDescription(NPath path, string packageSource)
     {
         Path = path;
@@ -50,7 +39,19 @@ public class AsmDefDescription
     public string Name => Json["name"].Value<string>();
     public List<AsmRefDescription> IncludedAsmRefs { get; }
 
-    public string[] NamedReferences => Json["references"]?.Values<string>().ToArray() ?? Array.Empty<string>();
+    private string[] FixedNamedReferences;
+    public string[] NamedReferences
+    {
+        get
+        {
+            if (FixedNamedReferences == null)
+            {
+                FixedNamedReferences = Json["references"]?.Values<string>().Select(AsmDefConfigFile.GetRealAsmDefName).ToArray() ?? Array.Empty<string>();
+            }
+
+            return FixedNamedReferences;
+        }
+    }
 
     public bool NeedsEntryPointAdded()
     {
@@ -62,17 +63,25 @@ public class AsmDefDescription
             .Where(d => d != null && IsSupported(d.Name))
             .ToArray();
 
-    public Platform[] IncludePlatforms => ReadPlatformList(Json["includePlatforms"]);
-    public Platform[] ExcludePlatforms => ReadPlatformList(Json["excludePlatforms"]);
-    public bool Unsafe => Json["allowUnsafeCode"]?.Value<bool>() == true;
     public NPath Directory => Path.Parent;
-
-    public string[] DefineConstraints => Json["defineConstraints"]?.Values<string>().ToArray() ?? Array.Empty<string>();
-
-    public string[] OptionalUnityReferences => Json["optionalUnityReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
-    
     public bool IsTinyRoot { get; set; }
     
+    public Platform[] IncludePlatforms => ReadPlatformList(Json["includePlatforms"]);
+    public Platform[] ExcludePlatforms => ReadPlatformList(Json["excludePlatforms"]);
+    public bool AllowUnsafeCode => Json["allowUnsafeCode"]?.Value<bool>() == true;
+
+    public string[] DefineConstraints => Json["defineConstraints"]?.Values<string>().ToArray() ?? Array.Empty<string>();
+    public string[] PositiveDefineConstraints => DefineConstraints.Where(s => !s.StartsWith("!")).ToArray();
+    public string[] NegativeDefineConstraints => DefineConstraints.Where(s => s.StartsWith("!")).Select(s => s.Substring(1)).ToArray();
+
+    public string[] OptionalUnityReferences => Json["optionalUnityReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
+
+    public bool IncludeTestAssemblies => OptionalUnityReferences.Contains("TestAssemblies");
+    
+    public bool AutoReferenced => Json["autoReferenced"]?.Value<bool>() == true;
+    public bool NoEngineReferences => Json["noEngineReferences"]?.Value<bool>() == true;
+    public bool OverrideReferences => Json["overrideReferences"]?.Value<bool>() == true;
+    public string[] PrecompiledReferences => Json["precompiledReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
 
     private static Platform[] ReadPlatformList(JToken platformList)
     {

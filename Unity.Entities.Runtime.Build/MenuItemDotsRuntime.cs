@@ -1,8 +1,9 @@
 using System.IO;
-using Unity.Entities.Conversion;
 using Unity.Build.Common;
 using Unity.Build.Editor;
+using Unity.Entities.Conversion;
 using UnityEditor;
+using UnityEngine;
 using BuildPipeline = Unity.Build.BuildPipeline;
 
 namespace Unity.Entities.Runtime.Build
@@ -26,7 +27,14 @@ namespace Unity.Entities.Runtime.Build
                 new GeneralSettings(),
                 new SceneList(),
                 new ConversionSystemFilterSettings(),
-                new DotsRuntimeBuildProfile { Pipeline = pipeline });
+                new DotsRuntimeBuildProfile
+                {
+#if UNITY_2020_1_OR_NEWER
+                    Pipeline = new LazyLoadReference<BuildPipeline> { asset = pipeline }
+#else
+                    Pipeline = pipeline
+#endif
+                });
         }
     }
 }

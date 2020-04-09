@@ -3,7 +3,7 @@
 # Comments and whitespace can e.g. be used to group by tool (e.g. all roslyn in one group).
 
 # il2cpp
-public: il2cpp/20.03.05_b7f4017c75c257c6c14b39b3df68f4685736efc92f77dc3ca2e00ae48896a8ed.7z
+public: il2cpp/20.04.02_27f9d35be196c07e76914d652efecaaa208bc86889b98477503df1dd58fa6199.7z
 public: MonoBleedingEdgeSub/acf432a39edc3865d3d97f1825d9576459049f6e_ecafea2afec824fb3f917fcf86ced28099849bc7174252d2929fb02b7e5b1b4b.7z
 
 # node
@@ -61,6 +61,7 @@ public: nasm-linux-x64/2.13.03_5a417dff42087aa0de55dff1d642aa40dde469570587afbb3
 # reference assemblies
 public: referenceassemblies_v471/1_a0c33a9a16a4ad77c158aac7cd7e47daed3e68b180c65e14474f44c9501c4fae.7z
 public: referenceassemblies_v46/1_3750434ae503231abc3db765a9a8972337bdb0392b992cb22f879fe42f62c746.7z
+public: netstandard20/2.0.3_c4bab02ce749763ceb263c3696cc2831e8ff4d66ac3c342e3834bc7dcaf171b5.7z
 
 # dots editor tools
 public: dots-editor-tools/1.0.0_9f15bca31908a316ff27a135357241b3db48f041eb3804ec07b7a569019234ea.7z

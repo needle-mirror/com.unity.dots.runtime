@@ -19,6 +19,7 @@ namespace Unity.Entities.Runtime.Build
         public override Type[] RequiredComponents => new[]
         {
             typeof(DotsRuntimeBuildProfile),
+            typeof(DotsRuntimeRootAssembly),
             typeof(SceneList)
         };
 
@@ -26,6 +27,7 @@ namespace Unity.Entities.Runtime.Build
         {
             var manifest = context.BuildManifest;
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
+            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
             var buildScenes = GetRequiredComponent<SceneList>(context);
 
             var exportedSceneGuids = new HashSet<Guid>();
@@ -39,7 +41,8 @@ namespace Unity.Entities.Runtime.Build
             void ExportSceneToFile(Scene scene, Guid guid)
             {
                 var config = BuildContextInternals.GetBuildConfiguration(context);
-                var dataDirectory = profile.StagingDirectory.Combine(config.name).Combine("Data");
+                var targetName = rootAssembly.MakeBeeTargetName(config);
+                var dataDirectory = rootAssembly.StagingDirectory.Combine(targetName).Combine("Data");
                 var outputFile = dataDirectory.GetFile(guid.ToString("N"));
                 using (var exportWorld = new World("Export World"))
                 {

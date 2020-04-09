@@ -11,7 +11,8 @@ namespace Unity.Entities.Runtime.Build
     {
         public override Type[] RequiredComponents => new[]
         {
-            typeof(DotsRuntimeBuildProfile)
+            typeof(DotsRuntimeBuildProfile),
+            typeof(DotsRuntimeRootAssembly)
         };
 
         public override Type[] OptionalComponents => new[]
@@ -21,12 +22,14 @@ namespace Unity.Entities.Runtime.Build
 
         public override BuildStepResult RunBuildStep(BuildContext context)
         {
-            var arguments = BuildContextInternals.GetBuildConfiguration(context).name;
+            var config = BuildContextInternals.GetBuildConfiguration(context);
             var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
-            var workingDir = profile.BeeRootDirectory;
-            var outputDir = new DirectoryInfo(this.GetOutputBuildDirectory(context));
+            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
+            var targetName = rootAssembly.MakeBeeTargetName(config);
+            var workingDir = DotsRuntimeRootAssembly.BeeRootDirectory;
+            var outputDir = new DirectoryInfo(BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName));
 
-            var result = BeeTools.Run(arguments, workingDir, context.BuildProgress);
+            var result = BeeTools.Run(targetName, workingDir, context.BuildProgress);
             outputDir.Combine("Logs").GetFile("BuildLog.txt").WriteAllText(result.Output);
             workingDir.GetFile("runbuild" + ShellScriptExtension()).UpdateAllText(result.Command);
 
@@ -35,9 +38,9 @@ namespace Unity.Entities.Runtime.Build
                 return Failure(result.Error);
             }
 
-            if (!string.IsNullOrEmpty(profile.ProjectName))
+            if (!string.IsNullOrEmpty(rootAssembly.ProjectName))
             {
-                var outputTargetFile = outputDir.GetFile(profile.ProjectName + profile.Target.ExecutableExtension);
+                var outputTargetFile = outputDir.GetFile(rootAssembly.ProjectName + profile.Target.ExecutableExtension);
                 context.SetValue(new DotsRuntimeBuildArtifact { OutputTargetFile = outputTargetFile });
             }
 

@@ -75,7 +75,17 @@ public static class NativeJobsPrebuiltLibrary
 
         np.IncludeDirectories.Add(GetOrCreateArtifactPath("nativejobs-all-public").Combine("Include"));
 
-        DotsConfiguration DotsConfig(NativeProgramConfiguration npc) => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig.DotsConfiguration;
+        DotsConfiguration DotsConfig(NativeProgramConfiguration npc)
+        {
+            var dotsrtCSharpConfig = ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig;
+
+            // If collection checks have been forced on in a release build, swap in the develop version of the native jobs prebuilt lib
+            // as the release configuration will not contain the collection checks code paths.
+            if (dotsrtCSharpConfig.EnableUnityCollectionsChecks && dotsrtCSharpConfig.DotsConfiguration == DotsConfiguration.Release)
+                return DotsConfiguration.Develop;
+
+            return dotsrtCSharpConfig.DotsConfiguration;
+        }
 
         foreach (var platform in allPlatforms)
         {

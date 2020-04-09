@@ -127,22 +127,27 @@ namespace Unity.Entities.Runtime.Build
             var stagingDir = outputDir.Combine(name);
             var dataDir = stagingDir.Combine("Data");
 
-            var profile = new DotsRuntimeBuildProfile
+            var dotsrtProfile = new DotsRuntimeBuildProfile
             {
-                RootAssembly = AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(relativePath.ToString()),
                 Target = buildTarget,
                 Configuration = BuildType.Debug
             };
 
-            var config = BuildConfiguration.CreateInstance((c) =>
+            var dotsrtRootAssembly = new DotsRuntimeRootAssembly
+            {
+                RootAssembly = AssetDatabase.LoadAssetAtPath<AssemblyDefinitionAsset>(relativePath.ToString())
+            };
+
+            var buildConfig = BuildConfiguration.CreateInstance((c) =>
             {
                 c.hideFlags = HideFlags.HideAndDontSave;
-                c.SetComponent(profile);
-                c.SetComponent(new OutputBuildDirectory { OutputDirectory = $"Library/DotsRuntimeBuild/build/Mole3D/{profile.BeeTargetName}" });
+                c.SetComponent(dotsrtProfile);
+                c.SetComponent(dotsrtRootAssembly);
             });
+            buildConfig.SetComponent(new OutputBuildDirectory { OutputDirectory = $"Library/DotsRuntimeBuild/build/Mole3D/{dotsrtRootAssembly.MakeBeeTargetName(buildConfig)}"});
 
             var convSettings = new ConversionSystemFilterSettings("Unity.Rendering.Hybrid");
-            config.SetComponent(convSettings);
+            buildConfig.SetComponent(convSettings);
 
             var sceneList = new SceneList();
             var rootScenePath = ConversionUtils.GetScenePathForSceneWithName(name);
@@ -152,7 +157,7 @@ namespace Unity.Entities.Runtime.Build
                 Scene = GlobalObjectId.GetGlobalObjectIdSlow(scene),
                 AutoLoad = true
             });
-            config.SetComponent(sceneList);
+            buildConfig.SetComponent(sceneList);
 
             var pipeline = BuildPipeline.CreateInstance((p) =>
             {
@@ -167,9 +172,9 @@ namespace Unity.Entities.Runtime.Build
             });
 
             // Run build pipeline
-            using (var progress = new BuildProgress($"Build {profile.Target.DisplayName} {profile.Configuration}", "Building..."))
+            using (var progress = new BuildProgress($"Build {dotsrtProfile.Target.DisplayName} {dotsrtProfile.Configuration}", "Building..."))
             {
-                return pipeline.Build(config, progress);
+                return pipeline.Build(buildConfig, progress);
             }
         }
     }

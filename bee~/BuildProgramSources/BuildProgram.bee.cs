@@ -31,6 +31,15 @@ public class BuildProgram
     public static DotNetAssembly NUnitFramework { get; set; }
     public static DotNetAssembly NUnitLite { get; set; }
     public static DotNetAssembly[] ILPostProcessorAssemblies { get; private set; }
+    
+    /*
+     * HACK for right (03/25/2020) now until fixed sdk project files arrive from @andrews:
+     * pretend to compile against netfw instead of netstandard if projectfiles are requested, because
+     * otherwise bee will generate sdk style project files, which are broken with tiny. 
+     */
+    public static Framework HackedFrameworkToUseForProjectFilesIfNecessary => IsRequestedTargetExactlyProjectFiles()
+        ? (Framework) Framework.Framework461
+        : Framework.NetStandard20;
 
     public static Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>> PerConfigBuildSettings { get; set; } =
         new Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>>();
@@ -117,7 +126,7 @@ public class BuildProgram
 
         UnityLowLevel = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.LowLevel")
         {
-            References = { UnsafeUtility.DotNetAssembly },
+            References = { UnsafeUtility.Program },
             Unsafe = true
         };
         UnityLowLevel.NativeProgram.Libraries.Add(IsLinux, new SystemLibrary("dl"));
@@ -133,16 +142,18 @@ public class BuildProgram
             References = { UnityLowLevel, UnityTinyBurst, GetOrMakeDotsRuntimeCSharpProgramFor(burstAsmDef) },
             Unsafe = true
         };
+        
+        UnityCompilationPipeline = new DotNetAssembly(
+            AsmDefConfigFile.UnityCompilationPipelineAssemblyPath,
+            HackedFrameworkToUseForProjectFilesIfNecessary);
 
-        UnityCompilationPipeline = new DotNetAssembly(AsmDefConfigFile.UnityCompilationPipelineAssemblyPath, Framework.NetStandard20);
 
         var nunit = new StevedoreArtifact("nunit-framework");
         Backend.Current.Register(nunit);
         NUnitLite = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunitlite.dll"), Framework.Framework40);
         NUnitFramework = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunit.framework.dll"), Framework.Framework40);
 
-        BurstCompiler.BurstExecutable = burstAsmDef
-            .Path.Parent.Parent.Combine(".Runtime/bcl.exe").QuoteForProcessStart();
+        BurstCompiler.BurstExecutable = GetBurstExecutablePath(burstAsmDef).QuoteForProcessStart();
 
         var ilPostProcessorPrograms = asmDefDescriptions
             .Where(d => d.Name.EndsWith(".CodeGen") && !d.DefineConstraints.Contains("!NET_DOTS"))
@@ -230,7 +241,20 @@ public class BuildProgram
         if (!IsRequestedTargetExactlySingleAppSingleConfig())
             Backend.Current.AddAliasDependency("ProjectFiles", vs.Setup());
     }
-    
+
+    private static NPath GetBurstExecutablePath(AsmDefDescription burstAsmDef)
+    {
+        var burstDebugVariable = Environment.GetEnvironmentVariable("UNITY_BURST_RUNTIME_PATH");
+        if (!string.IsNullOrEmpty(burstDebugVariable))
+        {
+            var bclPath = burstDebugVariable.ToNPath().Combine("bcl.exe");
+            if (bclPath.FileExists())
+                return bclPath;
+        }
+
+        return burstAsmDef.Path.Parent.Parent.Combine(".Runtime/bcl.exe");
+    }
+
     private static bool IsTestProgramDotsRuntimeCompatible(DotsRuntimeCSharpProgram arg)
     {
         //We need a better way of knowing which asmdefs are supposed to work on dots-runtime, and which do not.  for now use a simple heuristic of "is it called Editor or is it called Hybrid"
@@ -278,22 +302,6 @@ public class BuildProgram
             return false;
                 
         return true;
-    }
-
-    private static DotsRuntimeCSharpProgram SetupTest(AsmDefDescription test)
-    {
-        var testProgram = GetOrMakeDotsRuntimeCSharpProgramFor(test);
-
-        if (!IsTestProgramDotsRuntimeCompatible(testProgram))
-            return null;
-
-        var name = test.Name;
-        
-        SetupTestForConfig(name, testProgram, DotsConfigs.HostDotnet);
-        // Turn back on when multi-threaded working: https://unity3d.atlassian.net/browse/DOTSR-75
-        //SetupTestForConfig(name, testProgram, DotsConfigs.MultithreadedJobsTestConfig);
-
-        return testProgram;
     }
 
     static void SetupTestForConfig(string name, AsmDefCSharpProgram testProgram, DotsRuntimeCSharpProgramConfiguration config)
@@ -345,11 +353,13 @@ public class BuildProgram
 
         foreach (var config in configsToUse)
         {
-            DotNetAssembly setupGame = gameProgram.SetupSpecificConfiguration(config)
-                .WithDeployables(
-                    new DotNetAssembly(
-                        Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"),
-                        Framework.FrameworkNone));
+            DotNetAssembly setupGame = gameProgram.SetupSpecificConfiguration(config);
+
+            if (config.TargetFramework == TargetFramework.Tiny)
+            {
+                var tinyStandard = new DotNetAssembly(Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"), Framework.FrameworkNone);
+                setupGame = setupGame.WithDeployables(tinyStandard);
+            } 
 
             var postILProcessedGame = ILPostProcessorTool.SetupInvocation(
                 setupGame,
@@ -363,23 +373,6 @@ public class BuildProgram
         
         var configToSetupGameBursted = new Dictionary<DotsRuntimeCSharpProgramConfiguration, DotNetAssembly>();
 
-        BurstCompiler hostBurstCompiler = null;
-        if (HostPlatform.IsWindows)
-        {
-            hostBurstCompiler = new BurstCompilerForWindows64();
-            hostBurstCompiler.Link = true;
-            hostBurstCompiler.OnlyStaticMethods = false;
-        }
-        else if (HostPlatform.IsOSX)
-        {
-            hostBurstCompiler = new BurstCompilerForMac();
-            hostBurstCompiler.Link = true;
-            hostBurstCompiler.OnlyStaticMethods = false;
-        }
-        else
-            Console.WriteLine("Tiny burst not yet supported on linux.");
-        var webBurstCompiler = new BurstCompilerForEmscripten();
-
         foreach (var kvp in configToSetupGame)
         {
             var config = kvp.Key;
@@ -387,6 +380,30 @@ public class BuildProgram
             
             if (config.UseBurst)
             {
+                
+                BurstCompiler burstCompiler = null;
+                if (config.Platform is WindowsPlatform)
+                {
+                    burstCompiler = new BurstCompilerForWindows64();
+                    burstCompiler.Link = false;
+                }
+                else if (config.Platform is MacOSXPlatform)
+                {
+                    burstCompiler = new BurstCompilerForMac();
+                    burstCompiler.Link = false;
+                }
+                else if (config.Platform is IosPlatform)
+                {
+                    burstCompiler = new BurstCompilerForiOS();
+                    burstCompiler.EnableStaticLinkage = true;
+                    burstCompiler.ObjectFileExtension = "a";
+                }
+
+                // Only generate marshaling info for platforms that require marshalling (e.g. Windows DotNet) 
+                // but also if collection checks are enabled (as that is why we need marshalling)
+                burstCompiler.EnableJobMarshalling &= config.EnableUnityCollectionsChecks;
+                burstCompiler.SafetyChecks = config.EnableUnityCollectionsChecks;
+
                 var outputDir = $"artifacts/{game.Name}/{config.Identifier}_bursted";
                 var isWebGL = config.Platform is WebGLPlatform;
                 var extension = config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat.Extension;
@@ -394,24 +411,42 @@ public class BuildProgram
                 //burst generates a .bundle on os x.
                 if (config.Platform is MacOSXPlatform)
                     extension = "bundle";
-                
-                var burstlib = BurstCompiler.SetupBurstCompilationAndLinkForAssemblies(
-                    isWebGL
-                        ? webBurstCompiler
-                        : hostBurstCompiler,
-                    setupGame,
-                    new NPath(outputDir).Combine(
-                        $"lib_burst_generated{("."+extension) ?? ""}"),
-                    outputDir,
-                    out var burstedGame);
 
-                if (isWebGL)
-                {
-                    il2CppOutputProgram.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
-                }
-                else
-                {
-                    burstedGame = burstedGame.WithDeployables(burstlib);
+                var burstLibName = "lib_burst_generated";
+                var burstDynamicLib = new NativeProgram(burstLibName);
+                DotNetAssembly burstedGame = setupGame;
+                if (!isWebGL)
+                { 
+                    var burstlib = BurstCompiler.SetupBurstCompilationForAssemblies(
+                        burstCompiler,
+                        setupGame,
+                        new NPath(outputDir).Combine("bclobj"),
+                        outputDir,
+                        burstLibName,
+                        out burstedGame);
+                    if (config.Platform is IosPlatform)
+                    {
+                        il2CppOutputProgram.Libraries.Add(c=>c.Equals(config.NativeProgramConfiguration), burstlib);
+                    }
+                    else
+                    {
+                        burstDynamicLib.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
+                        burstDynamicLib.Libraries.Add(
+                            c => c.Equals(config.NativeProgramConfiguration),
+                            gameProgram.TransitiveReferencesFor(config)
+                                .Where(
+                                    p => p is DotsRuntimeCSharpProgram &&
+                                         ((DotsRuntimeCSharpProgram) p).NativeProgram != null)
+                                .Select(
+                                    p => new NativeProgramAsLibrary(((DotsRuntimeCSharpProgram) p).NativeProgram)
+                                        {BuildMode = NativeProgramLibraryBuildMode.Dynamic}));
+                        DotsRuntimeCSharpProgram.SetupDotsRuntimeNativeProgram(burstLibName, burstDynamicLib);
+
+                        var builtBurstLib = burstDynamicLib.SetupSpecificConfiguration(
+                            config.NativeProgramConfiguration,
+                            config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat);
+                        burstedGame = burstedGame.WithDeployables(builtBurstLib);
+                    }
                 }
                 configToSetupGameBursted[config] = burstedGame;
             }

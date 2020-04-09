@@ -46,7 +46,7 @@ namespace Unity.Entities.Runtime.Build
         {
 
             var file = directory.Combine("selectedconfig.json").MakeAbsolute();
-            file.UpdateAllText(JsonSerialization.Serialize(new SelectedConfigJson()
+            file.UpdateAllText(JsonSerialization.ToJson(new SelectedConfigJson()
             {
                 Config = selectedConfig
             }));
@@ -121,14 +121,15 @@ namespace Unity.Entities.Runtime.Build
             }
 
             var compilationPipelinePath = new NPath(Path.Combine(EditorApplication.applicationContentsPath, "Managed", "Unity.CompilationPipeline.Common.dll"));
-            file.UpdateAllText(JsonSerialization.Serialize(new BeeAsmdefConfiguration()
+            file.UpdateAllText(JsonSerialization.ToJson(new BeeAsmdefConfiguration()
             {
                 asmdefs = asmdefs,
                 asmrefs = asmrefs,
                 UnityProjectPath = projectPath.ToString(),
                 ProjectName = projectPath.FileName,
                 Testables = testableAsmDefNames,
-                CompilationPipelineAssemblyPath = compilationPipelinePath.ToString()
+                CompilationPipelineAssemblyPath = compilationPipelinePath.ToString(),
+                BuildSettingsFileVersion = BuildStepGenerateBeeFiles.BuildSettingsFileVersion
             }));
             s_AlreadyWrittenDataFile = true;
         }
@@ -185,6 +186,7 @@ namespace Unity.Entities.Runtime.Build
             public string ProjectName;
             public List<string> Testables;
             public string CompilationPipelineAssemblyPath;
+            public int BuildSettingsFileVersion;
         }
 
         internal struct AsmDefDescription
@@ -205,7 +207,7 @@ namespace Unity.Entities.Runtime.Build
         static void WriteBeeConfigFile(NPath directory)
         {
             var file = directory.Combine("bee.config");
-            file.UpdateAllText(JsonSerialization.Serialize(new BeeConfig
+            file.UpdateAllText(JsonSerialization.ToJson(new BeeConfig
             {
                 BuildProgramBuildProgramFiles = new List<string>
                 {

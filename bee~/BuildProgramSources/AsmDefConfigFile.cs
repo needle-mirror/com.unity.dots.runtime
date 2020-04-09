@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
@@ -12,6 +13,7 @@ static class AsmDefConfigFile
     public static NPath UnityProjectPath { get; }
     public static NPath UnityCompilationPipelineAssemblyPath { get; }
     public static Dictionary<string, string> GuidsToAsmDefNames { get; } = new Dictionary<string, string>();
+    public static readonly int BuildSettingsFileVersion;
 
     static AsmDefConfigFile()
     {
@@ -19,39 +21,61 @@ static class AsmDefConfigFile
         UnityProjectPath = Json["UnityProjectPath"].Value<string>();
         ProjectName = Json["ProjectName"].Value<string>();
         UnityCompilationPipelineAssemblyPath = Json["CompilationPipelineAssemblyPath"].Value<string>();
+        BuildSettingsFileVersion = Json["BuildSettingsFileVersion"].Value<int>();
+
+        // asmrefs have to be created first, because they're used during construction of the asmdef description
+        foreach (var asmref in Json["asmrefs"].Values<JObject>())
+        {
+            var path = asmref["FullPath"].Value<string>().ToNPath();
+            var desc = new AsmRefDescription(path, asmref["PackageSource"].Value<string>());
+            _pathsToAsmRefDescription[path] = desc;
+        }
+
+        // then the Guid mapping has to be set up
         foreach (var asmdef in Json["asmdefs"].Values<JObject>())
         {
-            GuidsToAsmDefNames[asmdef["Guid"].Value<string>()] = asmdef["AsmdefName"].Value<string>();
+            var name = asmdef["AsmdefName"].Value<string>();
+            GuidsToAsmDefNames[asmdef["Guid"].Value<string>()] = name;
+        }
+
+        // finally we can create the AsmDefDescriptions
+        foreach (var asmdef in Json["asmdefs"].Values<JObject>())
+        {
+            var name = asmdef["AsmdefName"].Value<string>();
+            var desc = new AsmDefDescription(asmdef["FullPath"].Value<string>(), asmdef["PackageSource"].Value<string>());
+            _namesToAsmDefDescription[name] = desc;
         }
     }
 
+    public static string GetRealAsmDefName(string nameOrGuid)
+    {
+        if (nameOrGuid.StartsWith("GUID:"))
+        {
+            if (GuidsToAsmDefNames.TryGetValue(nameOrGuid.Substring(5), out var name))
+                return name;
+            Console.WriteLine($"No asmdef found for {nameOrGuid}");
+            return null;
+        }
+
+        return nameOrGuid;
+    }
+    
     public static string ProjectName { get; }
 
+    internal static HashSet<string> NotFoundNames = new HashSet<string>();
     public static AsmDefDescription AsmDefDescriptionFor(string asmdefname)
     {
+        if (asmdefname == null)
+            return null;
         if (_namesToAsmDefDescription.TryGetValue(asmdefname, out var result))
             return result;
+        if (!NotFoundNames.Contains(asmdefname))
+        {
+            Console.WriteLine($"No asmdef found for {asmdefname}");
+            NotFoundNames.Add(asmdefname);
+        }
 
-        var jobject = Json["asmdefs"].Values<JObject>().FirstOrDefault(o => o["AsmdefName"].Value<string>() == asmdefname);
-        if (jobject == null)
-            return null;
-        
-        result = new AsmDefDescription(jobject["FullPath"].Value<string>(), jobject["PackageSource"].Value<string>());
-        _namesToAsmDefDescription[asmdefname] = result;
-        return result;
-    }
-
-    public static AsmRefDescription AsmRefDescriptionFor(NPath path)
-    {
-        if (_pathsToAsmRefDescription.TryGetValue(path, out var result))
-            return result;
-        var jobject = Json["asmrefs"].Values<JObject>().FirstOrDefault(o => o["FullPath"].Value<string>().ToNPath() == path);
-        if (jobject == null)
-            return null;
-
-        result = new AsmRefDescription(jobject["FullPath"].Value<string>(), jobject["PackageSource"].Value<string>());
-        _pathsToAsmRefDescription[path] = result;
-        return result;
+        return null;
     }
 
     public static DotsRuntimeCSharpProgram CSharpProgramFor(string asmdefname)
@@ -61,24 +85,12 @@ static class AsmDefConfigFile
             return null;
         return BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(desc);
     }
-    
-    public static IEnumerable<AsmDefDescription> AssemblyDefinitions
-    {
-        get
-        {
-            foreach (var jobject in Json["asmdefs"].Values<JObject>())
-                yield return AsmDefDescriptionFor(jobject["AsmdefName"].Value<string>());
-        }
-    }
-    
-    public static IEnumerable<AsmRefDescription> AsmRefs
-    {
-        get
-        {
-            foreach (var jobject in Json["asmrefs"].Values<JObject>())
-                yield return AsmRefDescriptionFor(jobject["FullPath"].Value<string>().ToNPath());
-        }
-    }
+
+    public static IEnumerable<AsmDefDescription> AssemblyDefinitions => _namesToAsmDefDescription.Values;
+
+    public static IEnumerable<AsmRefDescription> AsmRefs => _pathsToAsmRefDescription.Values;
+
+    public static IEnumerable<AsmDefDescription> AutoReferencedAssemblyDefinitions => AssemblyDefinitions.Where(desc => desc.AutoReferenced);
 
     public static IEnumerable<AsmDefDescription> TestableAssemblyDefinitions
     {

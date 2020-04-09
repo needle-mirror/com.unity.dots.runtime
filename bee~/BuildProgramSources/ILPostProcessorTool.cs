@@ -73,19 +73,35 @@ static class ILPostProcessorTool
         var outputDirArg = "--outputDir " + targetDirectory.MakeAbsolute().QuoteForProcessStart();
         var processorPathsArg = processors.Count() > 0 ? "--processors " + processors.Select(p => p.QuoteForProcessStart()).Aggregate((s1, s2) => s1 + "," + s2) : "";
 
+        var referenceAssemblyProvider = ReferenceAssemblyProvider.Default;
+
         foreach (var inputAsm in inputAssemblies.OrderByDependencies())
         {
             var assemblyArg = inputAsm.Path.MakeAbsolute().QuoteForProcessStart();
             var referenceAsmPaths = inputAsm.RuntimeDependencies.Where(a => !a.Path.IsChildOf("post_ilprocessing"))
-                .Select(a => a.Path.MakeAbsolute().QuoteForProcessStart())
-                .Concat(
+                .Select(a => a.Path.MakeAbsolute().QuoteForProcessStart());
+
+            var dotsConfig = (DotsRuntimeCSharpProgramConfiguration)config;
+
+            if (dotsConfig.TargetFramework == TargetFramework.Tiny)
+            {
+                referenceAsmPaths = referenceAsmPaths.Concat(
                     new[]
                     {
                         Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll").MakeAbsolute().QuoteForProcessStart(),
                         Il2Cpp.TinyCorlib.Path.MakeAbsolute().QuoteForProcessStart()
                     });
-            var referencesArg = "--assemblyReferences " + referenceAsmPaths.Distinct().Aggregate((s1, s2) => s1 + "," + s2);
-            var dotsConfig = (DotsRuntimeCSharpProgramConfiguration)config;
+            }
+            else
+            {
+                var framework = inputAsm.Framework;
+                if (!referenceAssemblyProvider.TryFor(framework, false, out var referenceAssemblies, out var reason))
+                    throw new ArgumentException($"No reference assemblies found for {framework} reason: {reason}. provider: {referenceAssemblyProvider.GetType()}");
+
+                referenceAsmPaths = referenceAsmPaths.Concat(referenceAssemblies.Select(a => a.MakeAbsolute().QuoteForProcessStart()));
+            }
+
+            var referencesArg = referenceAsmPaths.Any() ? "--assemblyReferences " + referenceAsmPaths.Distinct().Aggregate((s1, s2) => s1 + "," + s2) : string.Empty;
             var allscriptDefines = dotsConfig.Defines.Concat(defines);
             var definesArg = !allscriptDefines.Empty() ? "--scriptingDefines " + allscriptDefines.Distinct().Aggregate((d1, d2) => d1 + "," + d2) : "";
             var targetFiles = TargetPathsFor(targetDirectory, inputAsm).ToArray();

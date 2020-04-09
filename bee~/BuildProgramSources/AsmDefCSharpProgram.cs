@@ -38,7 +38,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
         IncludePlatforms = AsmDefDescription.IncludePlatforms;
         ExcludePlatforms = AsmDefDescription.ExcludePlatforms;
-        Unsafe = AsmDefDescription.Unsafe;
+        Unsafe = AsmDefDescription.AllowUnsafeCode;
         References.Add(config =>
         {
             if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
@@ -88,12 +88,12 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
                    dc == "UNITY_DOTS_ENTRYPOINT" || Defines.For(config).Contains(dc));
     }
 
-    protected override bool ShouldTargetTinyCorlib(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
+    protected override TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
     {
         if (DoesTargetFullDotNet || IsTestAssembly || IsILPostProcessorAssembly)
-            return false;
+            return TargetFramework.NetStandard20;
 
-        return base.ShouldTargetTinyCorlib(config, program);
+        return base.GetTargetFramework(config, program);
     }
 
     public void AddPlatformImplementationFor(string baseFeatureAsmDefName, string platformImplAsmDefName)

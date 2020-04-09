@@ -10,6 +10,28 @@ using FieldTypeTuple = System.Collections.Generic.List<System.Tuple<Mono.Cecil.F
 
 namespace Unity.ZeroPlayer
 {
+    // utility until InterfaceGen is merged into the ILPP
+    static class ILProcessorExtensions
+    {
+        public static void InsertAfter(this ILProcessor ilProcessor, Instruction insertAfterThisOne,
+            IEnumerable<Instruction> instructions)
+        {
+            var prev = insertAfterThisOne;
+            foreach (var instruction in instructions)
+            {
+                ilProcessor.InsertAfter(prev, instruction);
+                prev = instruction;
+            }
+        }
+
+        public static void InsertBefore(this ILProcessor ilProcessor, Instruction insertBeforeThisOne,
+            IEnumerable<Instruction> instructions)
+        {
+            foreach (var instruction in instructions)
+                ilProcessor.InsertBefore(insertBeforeThisOne, instruction);
+        }
+    }
+
     class InterfaceGen
     {
         // Note that these can use nameof(Type.Func) when we switch to the ILPP approach.
@@ -22,11 +44,13 @@ namespace Unity.ZeroPlayer
         const string k_GetMarshalToBurstMethodFn = "GetMarshalToBurstMethod_Gen";
         const string k_GetMarshalFromBurstMethodFn = "GetMarshalFromBurstMethod_Gen";
         const string k_IsBursted = "IsBursted_Gen";
+        const string k_PatchMinMax = "PatchMinMax_Gen";
 
         // Placed on the JobProducer
         const string k_ProducerExecuteFn = "ProducerExecuteFn_Gen";
         const string k_ProducerScheduleFn = "ProducerScheduleFn_Gen";
         const string k_ProducerCleanupFn = "ProducerCleanupFn_Gen";
+        const string k_ProducerPatchMinMaxFn = "ProducerPatchMinMaxFn_Gen";
 
         const int k_ExecuteJobParam = 0;
         const int k_ExecuteJobIndexParam = 4;
@@ -35,8 +59,8 @@ namespace Unity.ZeroPlayer
         const int k_JobMetaDataIsParallelOffset = 16;
         const int k_JobMetaDataJobSize = 20;
         const int k_JobMetaDataDeferredDataPtr = 24;
-        const int kJobMetaDataManagedPtr = 32;
-        const int kJobMetaDataUnmanagedPtr = 40;
+        const int k_JobMetaDataManagedPtr = 32;
+        const int k_JobMetaDataUnmanagedPtr = 40;
 
         // Synchronize with low level job system!
         const int k_ProducerScheduleReturnValue = 4;
@@ -52,6 +76,7 @@ namespace Unity.ZeroPlayer
         MethodDefinition m_ExecuteJob;
         MethodDefinition m_CleanupJob;
         MethodDefinition m_IsBursted;
+        MethodDefinition m_PatchMinMax;
         TypeDefinition m_IJobBase;
         TypeDefinition m_UnsafeUtilityDef;
         TypeDefinition m_JobUtilityDef;
@@ -60,11 +85,7 @@ namespace Unity.ZeroPlayer
         TypeDefinition m_JobRangesDef;
         bool m_BurstEnabled;
         // IJobForEach re-uses types, and we don't want to multiply patch. This just records work done so it isn't re-done.
-        HashSet<string> m_Patched = new HashSet<string>();
-
-        // TODO the JobDataField is truly strange, and I'd like to pull it out.
-        // But there's working code that uses it, so it isn't trivial.
-        // A better generic resolution system might fix it.
+        HashSet<string> m_Patched = new HashSet<string>();    // TODO delete
 
         public class JobDesc
         {
@@ -80,9 +101,6 @@ namespace Unity.ZeroPlayer
             public TypeReference JobData;
             // If the jobs wraps an inner definition, it is here. (Or null if not.)
             public FieldDefinition JobWrapperField;
-            // If the job is IJobForEach, its Inferred data. IJobForEach aliases different structure
-            // types on top of one other, and other very specialized behaviors.
-            public TypeReference JobDataInferred;
         }
 
         public List<JobDesc> jobList = new List<JobDesc>();
@@ -120,13 +138,15 @@ namespace Unity.ZeroPlayer
         }
 
         // TODO: move to some general utility place. Here to package issue for release.
-        public static void IterateFields(TypeReference type, Action<FieldTypeTuple> processFunc)
+        // If the processFunc() returns true, it will continue to iterate down.
+        // Return false to prune the sub-tree.
+        public static void IterateFields(TypeReference type, Func<FieldTypeTuple, bool> processFunc)
         {
             var hierarchy = new FieldTypeTuple();
             IterateFieldsRecurse(type, hierarchy, processFunc);
         }
 
-        public static void IterateFieldsRecurse(TypeReference type, FieldTypeTuple hierarchy, Action<FieldTypeTuple> processFunc)
+        public static void IterateFieldsRecurse(TypeReference type, FieldTypeTuple hierarchy, Func<FieldTypeTuple, bool> processFunc)
         {
             var typeResolver = TypeResolver.For(type);
 
@@ -140,12 +160,12 @@ namespace Unity.ZeroPlayer
                     continue;
 
                 hierarchy.Add(new Tuple<FieldReference, TypeReference>(fieldReference, fieldType));
-                processFunc(hierarchy);
+                bool recurse = processFunc(hierarchy);
 
                 // Excluding statics for recursion covers:
                 // 1) enums which infinitely recurse because the values in the enum are of the same enum type
                 // 2) statics which infinitely recurse themselves (Such as vector3.zero.zero.zero.zero)
-                if (fieldType.IsValueType && !fieldType.IsPrimitive)
+                if (recurse && fieldType.IsValueType && !fieldType.IsPrimitive)
                 {
                     IterateFieldsRecurse(fieldType, hierarchy, processFunc);
                 }
@@ -221,20 +241,6 @@ namespace Unity.ZeroPlayer
                     jobDesc.JobInterface = type;
 
                     TypeReference jobData = executeMethod.Parameters[k_ExecuteJobParam].ParameterType.GetElementType();
-
-                    const string jobForEachPrefix = "Unity.Entities.JobForEachExtensions/JobStruct_Process";
-                    bool isIJobForEach = jobData.FullName.StartsWith(jobForEachPrefix);
-                    CustomAttribute inferredAttribute = GetInferredAttributeIfExists(type);
-                    if (isIJobForEach && inferredAttribute == null)
-                    {
-                        // Unused (by code-gen) definitions. There is a very similar one that will be used later.
-                        continue;
-                    }
-
-                    if (inferredAttribute != null)
-                    {
-                        jobDesc.JobDataInferred = (TypeReference)inferredAttribute.ConstructorArguments[0].Value;
-                    }
 
                     jobDesc.JobData = jobData;
                     jobDesc.JobWrapperField = FindJobData(jobDesc.JobData.Resolve());
@@ -329,6 +335,37 @@ namespace Unity.ZeroPlayer
             il.Emit(OpCodes.Ret);
 
             jobDesc.JobProducerDef.Methods.Add(scheduleFn);
+        }
+
+        void GenerateProducerPatchMinMaxFn(ModuleDefinition module, JobDesc jobDesc)
+        {
+            MethodDefinition minMaxFn = new MethodDefinition(k_ProducerPatchMinMaxFn,
+                MethodAttributes.Public | MethodAttributes.Static,
+                module.ImportReference(typeof(void)));
+
+            TypeDefinition minMaxTD = m_JobUtilityDef.NestedTypes.First(n => n.Name == "MinMax");
+            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None,module.ImportReference(minMaxTD));
+
+            minMaxFn.Body.InitLocals = true;
+            var il = minMaxFn.Body.GetILProcessor();
+
+            if (jobDesc.JobWrapperField != null)
+            {
+                var paramType = jobDesc.JobWrapperField.DeclaringType.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+
+                var wrapperParam = new ParameterDefinition("wrapper", ParameterAttributes.None,
+                    module.ImportReference(paramType.MakeByReferenceType()));
+                minMaxFn.Parameters.Add(wrapperParam);
+
+                var genericJobData = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+                var genericJobDataRef = module.ImportReference(genericJobData);
+
+                AddMinMaxIL(minMaxFn, module.Assembly, minMaxParam, genericJobDataRef, null);
+            }
+
+            il.Emit(OpCodes.Ret);
+            minMaxFn.Parameters.Add(minMaxParam);
+            jobDesc.JobProducerDef.Methods.Add(minMaxFn);
         }
 
         void EmitJobPointers(ModuleDefinition module, ILProcessor il, ParameterDefinition metaPtrParam, VariableDefinition metaPtrVar, ParameterDefinition jobIndexParam, VariableDefinition jobDataPtr)
@@ -485,6 +522,51 @@ namespace Unity.ZeroPlayer
             jobDesc.JobProducerDef.Methods.Add(executeGen);
         }
 
+        void EmitCallFromProducerToJobBase(JobDesc jobDesc, ModuleDefinition module, MethodDefinition caller, ILProcessor il,
+            VariableDefinition jobMetaPtrVar,
+            MethodDefinition methodToCall,
+            out VariableDefinition jobDataPtrVar, out TypeReference jobDataType)
+        {
+            // The UserJobData case is tricky.
+            // jobData.UserJobData.CleanupTasksFn_Gen()
+            // OR
+            // jobData.CleanupTasksFn_Gen()
+            if (jobDesc.JobWrapperField != null)
+            {
+                var genericJobDataRef = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+                jobDataType = module.ImportReference(genericJobDataRef);
+
+                jobDataPtrVar = new VariableDefinition(module.ImportReference(jobDataType.MakePointerType()));
+                caller.Body.Variables.Add(jobDataPtrVar);
+
+                EmitFirstJobPointer(module, il, jobMetaPtrVar, jobDataPtrVar);
+
+                // jobData.UserJobData.CleanupJobFn_Gen()
+                il.Emit(OpCodes.Ldloc, jobDataPtrVar);
+                il.Emit(OpCodes.Ldflda,
+                    module.ImportReference(TypeRegGen.MakeGenericFieldSpecialization(jobDesc.JobWrapperField,
+                        jobDesc.JobData.GenericParameters.ToArray())));
+
+                il.Emit(OpCodes.Constrained, jobDesc.JobProducerDef.GenericParameters[0]);
+            }
+            else
+            {
+                jobDataType = module.ImportReference(jobDesc.JobData.GenericParameters[0]);
+
+                jobDataPtrVar = new VariableDefinition(module.ImportReference(jobDataType.MakePointerType()));
+                caller.Body.Variables.Add(jobDataPtrVar);
+
+                EmitFirstJobPointer(module, il, jobMetaPtrVar, jobDataPtrVar);
+
+                // jobData.CleanupJobFn_Gen()
+                il.Emit(OpCodes.Ldloc, jobDataPtrVar);
+                il.Emit(OpCodes.Constrained, jobDataType);
+            }
+
+            // The first generic parameter is always the user Job, which is where the IJobBase has been attached.
+            il.Emit(OpCodes.Callvirt, module.ImportReference(methodToCall));
+        }
+
         void GenerateProducerCleanupFn(ModuleDefinition module, JobDesc jobDesc)
         {
             MethodDefinition cleanupFn = new MethodDefinition(k_ProducerCleanupFn,
@@ -517,14 +599,14 @@ namespace Unity.ZeroPlayer
 
             // void* managedPtr = (void*)(long)(*(IntPtr*)((byte*)jobMetaPtr + kJobMetaDataManagedPtr));
             il.Emit(OpCodes.Ldarg, metaPtrParam);
-            il.Emit(OpCodes.Ldc_I4, kJobMetaDataManagedPtr);
+            il.Emit(OpCodes.Ldc_I4, k_JobMetaDataManagedPtr);
             il.Emit(OpCodes.Add);
             il.Emit(OpCodes.Ldind_I);
             il.Emit(OpCodes.Stloc, managedMetaPtrVar);
 
             // void* unmanagedPtr = (void*)(long)(*(IntPtr*)((byte*)jobMetaPtr + kJobMetaDataUnmanagedPtr));
             il.Emit(OpCodes.Ldarg, metaPtrParam);
-            il.Emit(OpCodes.Ldc_I4, kJobMetaDataUnmanagedPtr);
+            il.Emit(OpCodes.Ldc_I4, k_JobMetaDataUnmanagedPtr);
             il.Emit(OpCodes.Add);
             il.Emit(OpCodes.Ldind_I);
             il.Emit(OpCodes.Stloc, unmanagedMetaPtrVar);
@@ -567,53 +649,12 @@ namespace Unity.ZeroPlayer
             // jobData.CleanupTasksFn_Gen()
             VariableDefinition jobDataPtrVar;
             TypeReference jobDataType;
+            EmitCallFromProducerToJobBase(jobDesc, module, cleanupFn, il,
+                jobMetaPtrVar, m_CleanupJob, out jobDataPtrVar, out jobDataType);
 
             if (jobDesc.JobWrapperField != null)
             {
-                var genericJobDataRef = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
-                jobDataType = module.ImportReference(genericJobDataRef);
-
-                jobDataPtrVar = new VariableDefinition(module.ImportReference(jobDataType.MakePointerType()));
-                cleanupFn.Body.Variables.Add(jobDataPtrVar);
-
-                EmitFirstJobPointer(module, il, jobMetaPtrVar, jobDataPtrVar);
-
-                // jobData.UserJobData.CleanupJobFn_Gen(ptr)
-                il.Emit(OpCodes.Ldloc, jobDataPtrVar);
-                il.Emit(OpCodes.Ldflda,
-                    module.ImportReference(TypeRegGen.MakeGenericFieldSpecialization(jobDesc.JobWrapperField,
-                        jobDesc.JobData.GenericParameters.ToArray())));
-
-                // TODO: can remove the pointer on the cleanup method. It is always null.
-                il.Emit(OpCodes.Ldc_I4_0);
-                il.Emit(OpCodes.Conv_U);
-                il.Emit(OpCodes.Constrained, jobDesc.JobProducerDef.GenericParameters[0]);
-            }
-            else
-            {
-                jobDataType = module.ImportReference(jobDesc.JobData.GenericParameters[0]);
-
-                jobDataPtrVar = new VariableDefinition(module.ImportReference(jobDataType.MakePointerType()));
-                cleanupFn.Body.Variables.Add(jobDataPtrVar);
-
-                EmitFirstJobPointer(module, il, jobMetaPtrVar, jobDataPtrVar);
-
-                // jobData.CleanupJobFn_Gen(null)
-                il.Emit(OpCodes.Ldloc, jobDataPtrVar);
-
-                // TODO: can remove the pointer on the cleanup method. It is always null.
-                il.Emit(OpCodes.Ldc_I4_0);
-                il.Emit(OpCodes.Conv_U);
-                il.Emit(OpCodes.Constrained, jobDataType);
-            }
-
-            // The first generic parameter is always the user Job, which is where the IJobBase has been attached.
-            il.Emit(OpCodes.Callvirt, module.ImportReference(m_CleanupJob));
-
-            if (jobDesc.JobWrapperField != null)
-            {
-                if (jobDesc.JobDataInferred == null) // TODO not supporting IJobForEach
-                    GenCleanupSafetyIL(cleanupFn, module.Assembly, jobDesc.JobData.Resolve(), jobDataPtrVar);
+                GenCleanupSafetyIL(cleanupFn, module.Assembly, jobDesc.JobData.Resolve(), jobDataPtrVar);
                 GenWrapperDeallocateIL(cleanupFn, module.Assembly, jobDesc.JobData.Resolve(), jobDataPtrVar);
             }
 
@@ -650,7 +691,6 @@ namespace Unity.ZeroPlayer
         // {
         //      jobData.UserJobData.PrepareJobAtExecuteTimeFn_Gen(jobIndex);  <-- generated here
         //      jobData.UserJobData.Execute(ref jobData.abData);
-        //      jobData.UserJobData.CleanupJobFn_Gen(&jobData);               <-- generated here
         // }
         void PatchProducerExecute(ModuleDefinition module, JobDesc jobDesc)
         {
@@ -671,6 +711,69 @@ namespace Unity.ZeroPlayer
             // The first generic parameter is always the user Job, which is where the IJobBase has been attached.
             il.InsertBefore(first, Instruction.Create(OpCodes.Constrained, jobDesc.JobProducerDef.GenericParameters[0]));
             il.InsertBefore(first, Instruction.Create(OpCodes.Callvirt, module.ImportReference(m_ExecuteJob)));
+        }
+
+        void PatchMinMaxRangeCall(ModuleDefinition module, JobDesc jobDesc)
+        {
+            MethodDefinition executeMethod = jobDesc.JobProducerDef.Methods.First(m => m.Name == "Execute");
+            executeMethod.Body.SimplifyMacros();
+            var bc = executeMethod.Body.Instructions;
+            var patchMinMaxFn = m_JobUtilityDef.Methods.First(m => m.Name == "PatchBufferMinMaxRanges");
+
+            TypeDefinition minMaxTD = m_JobUtilityDef.NestedTypes.First(n => n.Name == "MinMax");
+            var minMaxVar = new VariableDefinition(module.ImportReference(minMaxTD));
+            executeMethod.Body.Variables.Add(minMaxVar);
+
+            Instruction call = bc.FirstOrDefault(inst => inst.OpCode == OpCodes.Call &&
+                inst.Operand is MethodDefinition &&
+                ((MethodDefinition)(inst.Operand)).FullName == patchMinMaxFn.FullName);
+
+            if (call == null)    // not an error; just means PatchBufferMinMaxRanges isn't called.
+                return;
+
+            Instruction pop = call.Next;
+            if (pop.OpCode != OpCodes.Pop)
+                throw new Exception($"Error patching PatchBufferMinMaxRanges in {executeMethod.FullName}. Unexpected byte code.");
+
+            // JobsUtility.PatchBufferMinMaxRanges(IntPtr.Zero, UnsafeUtility.AddressOf(ref jobParallelForProducer), begin, end - begin);
+            // --> ProducerPatchMinMaxFn_Gen(minMax, ref jobParallelForProducer);
+            // --> jobParallelForProducer.JobData.Patch(minMax);
+
+            // Hybrid doesn't have the MinMax return, but Runtime does, so no one can ever use it.
+            // Remove() the Pop so we can us eth minMax.
+            bc.Remove(pop);
+
+            List<Instruction> instrList = new List<Instruction>();
+
+            instrList.Add(Instruction.Create(OpCodes.Stloc, minMaxVar));
+
+            instrList.Add(Instruction.Create(OpCodes.Ldarg, executeMethod.Parameters[0]));
+            instrList.Add(Instruction.Create(OpCodes.Ldloc, minMaxVar));
+
+            MethodDefinition producerMinMax = jobDesc.JobProducerDef.Methods.First(m => m.Name == k_ProducerPatchMinMaxFn);
+            instrList.Add(Instruction.Create(OpCodes.Call, module.ImportReference(
+                producerMinMax.MakeHostInstanceGeneric(jobDesc.JobProducer.GenericParameters.ToArray()))));
+
+            // jobData.JobData.PatchMinMax_Gen()
+            // OR
+            // jobData.PatchMinMax_Gen()
+            instrList.Add(Instruction.Create(OpCodes.Ldarg, executeMethod.Parameters[0]));
+            if (jobDesc.JobWrapperField != null)
+            {
+                instrList.Add(Instruction.Create(OpCodes.Ldflda,
+                    module.ImportReference(TypeRegGen.MakeGenericFieldSpecialization(jobDesc.JobWrapperField,
+                        jobDesc.JobData.GenericParameters.ToArray()))));
+            }
+
+            instrList.Add(Instruction.Create(OpCodes.Ldloc, minMaxVar));
+            instrList.Add(Instruction.Create(OpCodes.Constrained, jobDesc.JobProducerDef.GenericParameters[0]));
+
+            // The first generic parameter is always the user Job, which is where the IJobBase has been attached.
+            instrList.Add(Instruction.Create(OpCodes.Callvirt, module.ImportReference(m_PatchMinMax)));
+
+            var il = executeMethod.Body.GetILProcessor();
+            il.InsertAfter(call, instrList);
+            executeMethod.Body.Optimize();
         }
 
         static TypeReference[] MakeGenericArgsArray(ModuleDefinition module, IGenericParameterProvider forType, IEnumerable<GenericParameter> gp)
@@ -702,8 +805,7 @@ namespace Unity.ZeroPlayer
             // data.UserJobData.PrepareJobAtScheduleTimeFn_Gen()
             // OR
             // data.PrepareJobAtScheduleTimeFn_Gen()
-            if (jobDesc.JobDataInferred != null || jobDesc.JobWrapperField == null)
-
+            if (jobDesc.JobWrapperField == null)
             {
                 if (context.Parameters[0].ParameterType.IsByReference)
                     il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarg, context.Parameters[0]));
@@ -806,12 +908,7 @@ namespace Unity.ZeroPlayer
                                     if (jobDesc.JobWrapperField != null)
                                     {
                                         var arr = MakeGenericArgsArray(module, jobDesc.JobData, method.GenericParameters);
-                                        TypeReference tr = null;
-                                        if (jobDesc.JobDataInferred != null)
-                                            tr = module.ImportReference(jobDesc.JobDataInferred.MakeGenericInstanceType(arr));
-                                        else
-                                            tr = module.ImportReference(jobDesc.JobData.MakeGenericInstanceType(arr));
-
+                                        TypeReference tr = module.ImportReference(jobDesc.JobData.MakeGenericInstanceType(arr));
                                         il.InsertAfter(sizeOffsetInstruction, Instruction.Create(OpCodes.Sizeof, module.ImportReference(tr)));
                                     }
                                     else
@@ -875,12 +972,7 @@ namespace Unity.ZeroPlayer
                                     // CustomJobProcess<T>.ProducerScheduleFn_Gen(ref data);    // if there is a job wrapper
                                     // OR
                                     // insert constant 4   // if there isn't a job wrapper or the call is unsupported.
-                                    if (jobDesc.JobDataInferred != null)
-                                    {
-                                        // TODO No longer supporting IJobForEach
-                                        il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldc_I4_4));
-                                    }
-                                    else if (jobDesc.JobWrapperField == null)
+                                    if (jobDesc.JobWrapperField == null)
                                     {
                                         // No wrapper - just insert the constant.
                                         il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldc_I4_4));
@@ -1040,10 +1132,12 @@ namespace Unity.ZeroPlayer
                 GenerateProducerCleanupFn(module, jobDesc);
                 // ExecuteFn calls CleanupFn, so generate CleanupFn first.
                 GenerateProducerExecuteFn(module, jobDesc);
+                GenerateProducerPatchMinMaxFn(module, jobDesc);
 
                 PatchProducerExecute(module, jobDesc);
                 PatchJobSchedule(module, jobDesc);
                 PatchCreateJobReflection(module, jobDesc);
+                PatchMinMaxRangeCall(module, jobDesc);
             }
         }
 
@@ -1083,10 +1177,6 @@ namespace Unity.ZeroPlayer
                                     {
                                         // Find the Execute method, pull out the types. A full set of types
                                         // is needed to close the Execute method.
-                                        MethodDefinition executeMethod = type.Methods.First(f => f.Name == "Execute");
-                                        List<TypeReference> types = ExecuteGen.ForEachExecuteTypes(executeMethod, out _);
-                                        args.AddRange(types);
-
                                         var producerExecuteFn = job.JobProducerDef.Methods.First(m => m.Name == k_ProducerExecuteFn);
                                         type.Methods.Add(GenGetExecuteMethodMethod(asm, type, producerExecuteFn, args));
 			                            type.Methods.Add(GenGetUnmanagedJobSizeMethodMethod(asm, type));
@@ -1139,6 +1229,7 @@ namespace Unity.ZeroPlayer
             m_ExecuteJob = m_IJobBase.Methods.First(m => m.Name == k_PrepareJobAtExecuteTimeFn);
             m_CleanupJob = m_IJobBase.Methods.First(m => m.Name == k_CleanupJobFn);
             m_IsBursted = m_IJobBase.Methods.First(m => m.Name == k_IsBursted);
+            m_PatchMinMax = m_IJobBase.Methods.First(m => m.Name == k_PatchMinMax);
 
             // Add the IJobBase interface to the custom job interface
             foreach (JobDesc job in jobList)
@@ -1175,6 +1266,7 @@ namespace Unity.ZeroPlayer
                                 type.Methods.Add(GenExecuteMethod(asm, type));
                                 type.Methods.Add(GenCleanupMethod(asm, type, null));
                                 type.Methods.Add(GenIsBurstedMethod(asm, type));
+                                type.Methods.Add(GenPatchMinMaxMethod(asm, type));
                             }
                         }
                         else if (jobDesc != null)
@@ -1191,6 +1283,7 @@ namespace Unity.ZeroPlayer
                                 type.Methods.Add(GenExecuteMethod(asm, type));
                                 type.Methods.Add(GenCleanupMethod(asm, type, jobDesc));
                                 type.Methods.Add(GenIsBurstedMethod(asm, type));
+                                type.Methods.Add(GenPatchMinMaxMethod(asm, type));
                             }
                         }
                     }
@@ -1369,6 +1462,32 @@ namespace Unity.ZeroPlayer
             return method;
         }
 
+        MethodDefinition GenPatchMinMaxMethod(
+            AssemblyDefinition asm,
+            TypeDefinition jobTypeDef)
+        {
+            var method = new MethodDefinition(k_PatchMinMax,
+                MethodAttributes.Public |
+                MethodAttributes.HideBySig |
+                MethodAttributes.NewSlot |
+                MethodAttributes.Virtual,
+                asm.MainModule.ImportReference(typeof(void)));
+
+            TypeDefinition minMaxTD = m_JobUtilityDef.NestedTypes.First(n => n.Name == "MinMax");
+            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None, asm.MainModule.ImportReference(minMaxTD));
+            method.Parameters.Add(minMaxParam);
+
+            // -------- Parameters ---------
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            AddMinMaxIL(method, asm, minMaxParam, jobTypeDef, null);
+
+            il.Emit(OpCodes.Ret);
+            method.Body.Optimize();
+            return method;
+        }
+
         MethodDefinition FindDeallocate(TypeDefinition td)
         {
             var deallocMethodDef = td.Methods.FirstOrDefault(m => m.Name == "Deallocate" && m.Parameters.Count == 0);
@@ -1522,8 +1641,6 @@ namespace Unity.ZeroPlayer
                 MethodAttributes.Virtual,
                 asm.MainModule.ImportReference(typeof(void)));
 
-            method.Parameters.Add(new ParameterDefinition("ptr", ParameterAttributes.None, asm.MainModule.ImportReference(typeof(void*))));
-
             method.Body.InitLocals = true;
             var bc = method.Body.Instructions;
 
@@ -1548,7 +1665,7 @@ namespace Unity.ZeroPlayer
                     FieldReference field = hierarchy.Last().Item1;
                     TypeReference fieldType = hierarchy.Last().Item2;
                     if (field == null || fieldType == null)
-                        return;
+                        return false;
 
                     if (fieldType.MetadataType == MetadataType.Int32)
                     {
@@ -1578,6 +1695,8 @@ namespace Unity.ZeroPlayer
                             il.Emit(OpCodes.Stfld, importedHierarchy[importedHierarchy.Count - 1]);
                         }
                     }
+
+                    return true;
                 });
         }
 
@@ -1620,7 +1739,7 @@ namespace Unity.ZeroPlayer
                     var fieldType = hierarchy.Last().Item2;
 
                     if (field == null || fieldType == null)
-                        return;
+                        return false;
 
                     // This method - AddSafetyIL - can be called on a UserJob or a wrapper.
                     // If the wrapper is used, we need to be careful to not recurse in to the UserJob,
@@ -1772,8 +1891,100 @@ namespace Unity.ZeroPlayer
                             }
                         }
                     }
+
+                    return true;
                 });
         }
+
+        static bool DisablesMinMaxSafety(FieldDefinition fd)
+        {
+            string[] pattern =
+            {
+                "ReadOnlyAttribute",
+                "NativeDisableContainerSafetyRestrictionAttribute",
+                "NativeDisableParallelForRestrictionAttribute"
+            };
+
+            if (fd.HasCustomAttributes)
+            {
+                foreach (var p in pattern)
+                {
+                    if (fd.CustomAttributes.FirstOrDefault(
+                        a => a.AttributeType.Name == p) != null)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        void AddMinMaxIL(
+            MethodDefinition method,
+            AssemblyDefinition asm,
+            ParameterDefinition minMaxParam,
+            TypeReference fieldsTypeRef,
+            VariableDefinition variableDefinition)    // if this is null, then "this" is assumed.
+        {
+            TypeDefinition fieldsTypeDef = fieldsTypeRef.Resolve();
+
+            if (!fieldsTypeDef.HasFields || !fieldsTypeDef.IsValueType || m_AtomicDef == null)
+                return;
+
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            IterateFields(fieldsTypeRef,
+                (List<Tuple<FieldReference, TypeReference>> hierarchy) =>
+                {
+                    var field = hierarchy.Last().Item1;
+                    var fieldType = hierarchy.Last().Item2;
+                    FieldDefinition fd = field.Resolve();
+
+                    if (field == null || fieldType == null)
+                        return false;
+
+                    if (DisablesMinMaxSafety(fd))
+                        return false;
+
+                    if (fieldType.MetadataType == MetadataType.Int32 && (field.Name == "m_MinIndex" || field.Name == "m_MaxIndex"))
+                    {
+                        fd.IsPublic = true;
+
+                        List<FieldReference> importedHierarchy = new List<FieldReference>();
+                        foreach (var set in hierarchy)
+                        {
+                            var importedRef = CreateImportedField(asm.MainModule, set.Item1);
+                            var declaringType = set.Item1.DeclaringType;
+                            if (declaringType.HasGenericParameters)
+                            {
+                                importedRef = TypeRegGen.MakeGenericFieldSpecialization(importedRef, declaringType.GenericParameters.ToArray());
+                            }
+
+                            importedHierarchy.Add(importedRef);
+                            set.Item1.Resolve().IsPublic = true;
+                        }
+
+                        EmitLdThisOrVar(il, variableDefinition);
+                        for(int i=0; i<importedHierarchy.Count-1; ++i)
+                        {
+                            il.Emit(OpCodes.Ldflda, importedHierarchy[i]);
+                        }
+
+                        // Load, then store, the min or max.
+                        il.Emit(OpCodes.Ldarg, minMaxParam);
+                        string fieldName = field.Name == "m_MinIndex" ? "Min" : "Max";
+                        var fInMinMax = minMaxParam.ParameterType.Resolve().Fields.First(f => f.Name == fieldName);
+                        il.Emit(OpCodes.Ldfld, asm.MainModule.ImportReference(fInMinMax));
+
+                        il.Emit(OpCodes.Stfld, asm.MainModule.ImportReference(importedHierarchy[importedHierarchy.Count-1])); //asm.MainModule.ImportReference(field.Resolve()));
+                    }
+
+                    return true;
+                });
+        }
+
 
         void GenCleanupSafetyIL(
             MethodDefinition method,
@@ -1797,7 +2008,7 @@ namespace Unity.ZeroPlayer
                     var field = hierarchy.Last().Item1;
                     var fieldType = hierarchy.Last().Item2;
                     if (field == null || fieldType == null)
-                        return;
+                        return false;
 
                     if (fieldType.IsValueType && !fieldType.IsPrimitive)
                     {
@@ -1851,6 +2062,8 @@ namespace Unity.ZeroPlayer
                             }
                         }
                     }
+
+                    return true;
                 });
         }
     }

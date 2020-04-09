@@ -3,17 +3,15 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
-using Unity.Platforms;
 using Unity.Build;
+using Unity.Platforms;
 
 namespace Unity.Entities.Runtime.Build
 {
     internal static class BeeTools
     {
-        // Group 1: progress numerator
-        // Group 2: progress denominator
-        // Group 3: progress description
-        static readonly Regex BeeProgressRegex = new Regex(@"\[(?:(\s*\d+)/(\s*\d+)|\s*\w*)\s*(?:\w*)\]\s*(.*)", RegexOptions.Compiled);
+        static readonly Regex BeeProgressRegex = new Regex(@"^\[\s*(?'nominator'\d+)\/(?'denominator'\d+).*] (?'annotation'.*)$", RegexOptions.Compiled);
+        static readonly Regex BeeBusyRegex = new Regex(@"^\[\s*BUSY.*\] (?'annotation'.*)$", RegexOptions.Compiled);
 
         struct BeeProgressInfo
         {
@@ -49,37 +47,33 @@ namespace Unity.Entities.Runtime.Build
 
             void ProgressHandler(object sender, DataReceivedEventArgs args)
             {
-                if (args.Data != null)
-                {
-                    lock (output)
-                    {
-                        output.AppendLine(args.Data);
-                    }
-                }
-
-                var msg = args.Data;
-                if (string.IsNullOrWhiteSpace(msg))
+                if (string.IsNullOrWhiteSpace(args.Data))
                 {
                     return;
                 }
 
-                progressInfo.FullInfo = msg;
-
-                var match = BeeProgressRegex.Match(msg);
+                var match = BeeProgressRegex.Match(args.Data);
                 if (match.Success)
                 {
-                    var num = match.Groups[1].Value;
-                    var den = match.Groups[2].Value;
+                    var num = match.Groups["nominator"].Value;
+                    var den = match.Groups["denominator"].Value;
                     if (int.TryParse(num, out var numInt) && int.TryParse(den, out var denInt))
                     {
                         progressInfo.Progress = (float)numInt / denInt;
                     }
-                    progressInfo.Info = match.Groups[3].Value;
+                    progressInfo.Info = ShortenAnnotation(match.Groups["annotation"].Value);
                 }
-                else
+
+                var busyMatch = BeeBusyRegex.Match(args.Data);
+                if (busyMatch.Success)
                 {
-                    progressInfo.Progress = float.MinValue;
-                    progressInfo.Info = null;
+                    progressInfo.Info = ShortenAnnotation(busyMatch.Groups["annotation"].Value);
+                }
+
+                progressInfo.FullInfo = args.Data;
+                lock (output)
+                {
+                    output.AppendLine(args.Data);
                 }
             }
 
@@ -123,6 +117,21 @@ namespace Unity.Entities.Runtime.Build
             yield return progressInfo;
         }
 
+        static string ShortenAnnotation(string annotation)
+        {
+            var split = annotation.Split(' ');
+            for (int i = 0; i != split.Length; i++)
+            {
+                int lastSlash = split[i].LastIndexOf('/');
+                if (lastSlash != -1)
+                {
+                    split[i] = split[i].Substring(lastSlash + 1);
+                }
+            }
+            annotation = string.Join(" ", split);
+            return annotation;
+        }
+
         public class BeeRunResult
         {
             public int ExitCode { get; }
@@ -150,8 +159,8 @@ namespace Unity.Entities.Runtime.Build
             {
                 if (progress?.Update(beeProgressInfo.Current.Info, beeProgressInfo.Current.Progress) ?? false)
                 {
-                    beeProgressInfo.Current.Process.Kill();
-                    break;
+                    beeProgressInfo.Current.Process?.Kill();
+                    return new BeeRunResult(-1, command.ToString(), "Build was cancelled.");
                 }
             }
 

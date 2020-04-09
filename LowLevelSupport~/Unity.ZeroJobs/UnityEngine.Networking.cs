@@ -1,7 +1,7 @@
 using System;
 using UnityEngine.Events;
-#if DEBUG && !UNITY_WEBGL
-using Unity.Development;
+#if ENABLE_PLAYERCONNECTION
+using Unity.Development.PlayerConnection;
 #endif
 
 namespace UnityEngine.Events
@@ -24,28 +24,42 @@ namespace UnityEngine.Networking.PlayerConnection
 
         public static PlayerConnection instance => s_Instance = s_Instance ?? new PlayerConnection();
 
+#if ENABLE_PLAYERCONNECTION
+        private unsafe MessageStreamBuilder* buffer;
+
+        internal unsafe void Initialize()
+        {
+            buffer = MessageStreamManager.CreateBufferSend();
+        }
+
+        internal unsafe void Shutdown()
+        {
+            MessageStreamManager.DestroyBufferSend(buffer);
+        }
+#endif
+
         public void Register(Guid messageId, UnityAction<MessageEventArgs> callback)
         {
-#if DEBUG && !UNITY_WEBGL
-            PlayerConnectionService.RegisterMessage(messageId, callback);
+#if ENABLE_PLAYERCONNECTION
+            Connection.RegisterMessage(messageId, callback);
 #endif
         }
 
         public void Unregister(Guid messageId, UnityAction<MessageEventArgs> callback)
         {
-#if DEBUG && !UNITY_WEBGL
-            PlayerConnectionService.UnregisterMessage(messageId, callback);
+#if ENABLE_PLAYERCONNECTION
+            Connection.UnregisterMessage(messageId, callback);
 #endif
         }
 
         public void Send(Guid messageId, byte[] data)
         {
-#if DEBUG && !UNITY_WEBGL
+#if ENABLE_PLAYERCONNECTION
             unsafe
             {
                 fixed (byte* d = data)
                 {
-                    PlayerConnectionService.SendMessage(messageId, d, data.Length);
+                    buffer->WriteMessage(messageId, d, data.Length);
                 }
             }
 #endif

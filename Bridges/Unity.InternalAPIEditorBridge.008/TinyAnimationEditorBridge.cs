@@ -1,13 +1,12 @@
 using System;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 
 namespace TinyInternal.Bridge
 {
     public static class TinyAnimationEditorBridge
     {
-        const string k_AnimationClipExtension = ".anim";
-
         public enum RotationMode
         {
             Baked = RotationCurveInterpolation.Mode.Baked,
@@ -32,18 +31,25 @@ namespace TinyInternal.Bridge
             return AnimationUtility.GetAnimationClipSettings(clip);
         }
 
-        public static void CreateLegacyClip(string clipName)
+        public static AnimationClip[] GetAnimationClipsInAnimationPlayer(GameObject gameObject)
         {
-            var clip = new AnimationClip
-            {
-                legacy = true
-            };
+            return AnimationUtility.GetAnimationClipsInAnimationPlayer(gameObject);
+        }
 
-            if (!clipName.EndsWith(k_AnimationClipExtension, StringComparison.Ordinal))
-                clipName += k_AnimationClipExtension;
+        public static AnimatorController GetEffectiveAnimatorController(Animator animator)
+        {
+            return AnimatorController.GetEffectiveAnimatorController(animator);
+        }
 
-            var path = ProjectWindowUtil.GetActiveFolderPath();
-            ProjectWindowUtil.CreateAsset(clip, $"{path}/{clipName}");
+        public static void RegisterDirtyCallbackForAnimatorController(AnimatorController controller, Action dirtyCallback)
+        {
+            controller.OnAnimatorControllerDirty += dirtyCallback;
+        }
+
+        public static void UnregisterDirtyCallbackFromAnimatorController(AnimatorController controller, Action dirtyCallback)
+        {
+            // ReSharper disable once DelegateSubtraction
+            controller.OnAnimatorControllerDirty -= dirtyCallback;
         }
     }
 }

@@ -115,6 +115,10 @@ public static class Il2Cpp
             Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
+            
+            // Remove this comment to enable the managed debugger log file. It will be written to the working directory.
+            //Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER_LOGFILE=il2cpp-debugger.log");
+            
             Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration != DotsConfiguration.Release, "IL2CPP_TINY_DEBUG_METADATA");
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithExceptions(true));
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithRTTI(true));
@@ -139,7 +143,7 @@ public static class Il2Cpp
             staticLibs.ForEach(l => Defines.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, PinvokeInternalDefineFor(l)));
 
             if (config.EnableManagedDebugging)
-                SupportFiles.Add(new DeployableFile(Il2CppTargetDirForAssembly(setupGame).Combine(metadataFilePath), new NPath(metadataFilePath)));
+                SupportFiles.Add(c => c == config.NativeProgramConfiguration, new DeployableFile(Il2CppTargetDirForAssembly(setupGame).Combine(metadataFilePath), new NPath(metadataFilePath)));
         }
 
         private string PinvokeInternalDefineFor(IDeployable staticLib)
@@ -205,7 +209,25 @@ public static class Il2Cpp
             //"Il2CppProjectedComCallableWrapperMethods.cpp",
             "driver.cpp",
             "GenericMethods.cpp",
+            "GenericMethods1.cpp",
+            "GenericMethods2.cpp",
+            "GenericMethods3.cpp",
+            "GenericMethods4.cpp",
+            "GenericMethods5.cpp",
+            "GenericMethods6.cpp",
+            "GenericMethods7.cpp",
+            "GenericMethods8.cpp",
+            "GenericMethods9.cpp",
             "Generics.cpp",
+            "Generics1.cpp",
+            "Generics2.cpp",
+            "Generics3.cpp",
+            "Generics4.cpp",
+            "Generics5.cpp",
+            "Generics6.cpp",
+            "Generics7.cpp",
+            "Generics8.cpp",
+            "Generics9.cpp",
             "Il2CppGenericComDefinitions.cpp",
         };
 
@@ -233,8 +255,8 @@ public static class Il2Cpp
             "Il2CppMetadataUsage.c",
             "Il2CppTypeDefinitions.c",
             "Il2CppCodeRegistration.cpp",
-            "Il2CppCompilerCalculateTypeValues.cpp",
-            "Il2CppCompilerCalculateTypeValuesTable.cpp",
+            "Il2CppCCTypeValuesTable.cpp",
+            "Il2CppCCalculateTypeValues.cpp",
             "Il2CppGenericMethodPointerTable.cpp",
             "Il2CppInteropDataTable.cpp",
             "Il2CppInvokerTable.cpp",

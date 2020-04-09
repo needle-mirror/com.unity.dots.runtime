@@ -153,15 +153,10 @@ namespace Unity.ZeroPlayer
             // This call can be removed once IL2CPP supports module initializers
             InjectRegisterAllAssemblyRegistries();
             
-            m_executeGen = new ExecuteGen(m_AssemblyDefs);
             m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_BurstEnabled);
-
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
-            m_executeGen.PatchForEachInterface();
-            m_executeGen.GenerateForEachMethods();
-            m_interfaceGen.InjectBurstInfrastructureMethods(); 
-            PatchCalls();
+            m_interfaceGen.InjectBurstInfrastructureMethods();
 
             ScanAndInjectCustomBootstrap();
             
@@ -341,52 +336,10 @@ namespace Unity.ZeroPlayer
                 var readerParams = new ReaderParameters() { AssemblyResolver = assemblyResolver };
                 m_MscorlibAssembly = AssemblyDefinition.ReadAssembly(typeof(object).Assembly.Location, readerParams);
                 assemblyResolver.Add(m_MscorlibAssembly);
+                m_WriteOutMscorlib = false; // This was not an input, therefore we should not write it out
             }
         }
 
-        void RecursePatchCalls(TypeDefinition type, AssemblyDefinition asm)
-        {
-            foreach (TypeDefinition td in type.NestedTypes)
-            {
-                RecursePatchCalls(td, asm);
-            }
-
-            foreach (var method in type.Methods)
-            {
-                if (method.HasBody)
-                {
-                    // The goal here is to scan a subset of methods; there just happens to be a one to one
-                    // mapping. When we scan something else, it can bucked into the Call or Callvirt group.
-                    var outerGIList = method.Body.Instructions.Where(i => i.OpCode == OpCodes.Call);
-                    m_executeGen.PatchScheduleCalls(asm, outerGIList);
-                }
-            }
-        }
-
-        /// <summary>
-        /// This does call-site patching of Schedule() calls.
-        /// Transforming:
-        ///     job.Schedule(system);
-        /// into:
-        ///     JobProcessComponentDataExtensions.Schedule_D<Game.RotateSpriteSystem.RotateSpritesJob, Rotation>(system);
-        ///
-        /// generically the above is:
-        ///     Schedule_D<TJob, T0>(TJob job, ComponentSystemBase system);
-        /// </summary>
-        public void PatchCalls()
-        {
-            foreach (AssemblyDefinition asm in m_AssemblyDefs)
-            {
-                foreach (ModuleDefinition mod in asm.Modules)
-                {
-                    foreach (TypeDefinition t in mod.Types)
-                    {
-                        RecursePatchCalls(t, asm);
-                    }
-                }
-            }
-        }
-        
         private static void ForceTypeAsPublicRecurse(TypeDefinition typeDef)
         {
             if (typeDef == null)
@@ -456,6 +409,9 @@ namespace Unity.ZeroPlayer
             {
                 string asmPath = asm.MainModule.FileName;
                 string asmFileName = asmPath.Substring(asmPath.LastIndexOf(Path.DirectorySeparatorChar) + 1);
+                if (string.Equals(asmFileName, "mscorlib.dll", StringComparison.OrdinalIgnoreCase) && !m_WriteOutMscorlib)
+                    continue;
+
                 var outPath = Path.Combine(m_OutputDir, asmFileName);
 
                 var writerParams = new WriterParameters() { WriteSymbols = asm.MainModule.HasSymbols };
@@ -722,11 +678,11 @@ namespace Unity.ZeroPlayer
         int m_ArchBits;
         bool m_BurstEnabled;
         string m_OutputDir;
-        ExecuteGen m_executeGen;
         InterfaceGen m_interfaceGen;
         
         AssemblyDefinition m_MscorlibAssembly;
         AssemblyDefinition m_EntityAssembly;
         List<AssemblyDefinition> m_AssemblyDefs;
+        bool m_WriteOutMscorlib = true;
     }
 }

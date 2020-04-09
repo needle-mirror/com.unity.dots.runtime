@@ -1,5 +1,5 @@
-using System.Runtime.InteropServices;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
+using System.Runtime.InteropServices;
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -169,13 +169,18 @@ namespace Unity.Collections.LowLevel.Unsafe
         // which accesses that memory/object.
         internal unsafe AtomicSafetyNodePatched *nodeLocalPtr;
 
-        //---------------------------------------------------------------------------------------------------
-        #region Basic lifetime management
 
-        internal static void StaticInit()
+        //---------------------------------------------------------------------------------------------------
+        // Basic lifetime management
+        //---------------------------------------------------------------------------------------------------
+
+        public static void Initialize()
         {
             unsafe
             {
+                // Keep from initializing twice
+                if (GetTempSliceHandle() != null)
+                    return;
                 var tempSliceHandle = CreateOnHeap();
                 SetTempSliceHandle(tempSliceHandle);
                 tempSliceHandle->SetAllowSecondaryVersionWriting(false);
@@ -183,6 +188,19 @@ namespace Unity.Collections.LowLevel.Unsafe
                 var tempMemSafetyHandle = CreateOnHeap();
                 SetTempMemSafetyHandle(tempMemSafetyHandle);
             }
+        }
+
+        public unsafe static void Shutdown()
+        {
+            // Protect from multiple shutdown
+            if (GetTempSliceHandle() == null)
+                return;
+            Release(GetTempUnsafePtrSliceHandle());
+            UnsafeUtility.Free(GetTempSliceHandle(), Allocator.Persistent);
+            SetTempSliceHandle(null);
+            Release(GetTempMemoryHandle());
+            UnsafeUtility.Free(GetTempMemSafetyHandle(), Allocator.Persistent);
+            SetTempMemSafetyHandle(null);
         }
 
         public static AtomicSafetyHandle GetTempUnsafePtrSliceHandle()
@@ -265,10 +283,10 @@ namespace Unity.Collections.LowLevel.Unsafe
             }
         }
 
-        #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region Quick tests (often used to avoid executing much slower test code)
+        // Quick tests (often used to avoid executing much slower test code)
+        //---------------------------------------------------------------------------------------------------
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal unsafe bool IsValid() => (nodePtr != null) &&
@@ -286,10 +304,10 @@ namespace Unity.Collections.LowLevel.Unsafe
         public unsafe bool IsAllowedToDispose() => (nodePtr != null) &&
             (version == (UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.VersionAndDisposeProtect));
 
-        #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region Externally used by owners of safety handles to setup safety handles
+        // Externally used by owners of safety handles to setup safety handles
+        //---------------------------------------------------------------------------------------------------
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe int UncheckedGetNodeVersion() => 
@@ -354,10 +372,10 @@ namespace Unity.Collections.LowLevel.Unsafe
             handle.SetBumpSecondaryVersionOnScheduleWrite(bump);
         }
 
-        #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region Used by CodeGen specifically
+        // Used by CodeGen specifically
+        //---------------------------------------------------------------------------------------------------
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void PatchLocal(ref AtomicSafetyHandle handle)
@@ -434,10 +452,10 @@ namespace Unity.Collections.LowLevel.Unsafe
             }
         }
 
-        #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region JobsDebugger safety checks usage (may be used internally as well)
+        // JobsDebugger safety checks usage (may be used internally as well)
+        //---------------------------------------------------------------------------------------------------
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe AtomicSafetyNode* GetInternalNode()
@@ -495,10 +513,10 @@ namespace Unity.Collections.LowLevel.Unsafe
 
         public static string GetWriterName(AtomicSafetyHandle handle) => "(GetWriterName not implemented yet)";
 
-        #endregion
 
         //---------------------------------------------------------------------------------------------------
-        #region Should be in JobsDebugger namespace or something because they know both control jobs and safety handles
+        // Should be in JobsDebugger namespace or something because they know both control jobs and safety handles
+        //---------------------------------------------------------------------------------------------------
 
         public static EnforceJobResult EnforceAllBufferJobsHaveCompleted(AtomicSafetyHandle handle) =>
             EnforceJobResult.AllJobsAlreadySynced;
@@ -702,8 +720,6 @@ namespace Unity.Collections.LowLevel.Unsafe
             if (!handle.IsValid())
                 throw new System.InvalidOperationException("The safety handle is no longer valid -- a native container or other protected resource has been deallocated");
         }
-
-        #endregion
     }
 
 
@@ -719,8 +735,5 @@ namespace Unity.Collections.LowLevel.Unsafe
     {
     }
 }
-
-
-
 
 #endif // ENABLE_UNITY_COLLECTIONS_CHECKS

@@ -17,7 +17,11 @@ namespace Unity.Jobs
         // A wrapper around the user's Execute() method.
         void PrepareJobAtExecuteTimeFn_Gen(int jobIndex);
         // Free memory, performs any cleanup.
-        unsafe void CleanupJobFn_Gen(void* ptr);
+        void CleanupJobFn_Gen();
+        // Patches the min/max range of a parallel job so that multiple threads
+        // aren't writing to the same indices.
+        void PatchMinMax_Gen(JobsUtility.MinMax param);
+
         // Retrieves the ExecuteMethod.
         JobsUtility.ManagedJobForEachDelegate GetExecuteMethod_Gen();
         // Retrieves the UnmanagedJobSize
@@ -197,7 +201,7 @@ namespace Unity.Jobs
             public delegate void ExecuteJobFunction(ref JobParallelForProducer<T> jobParallelForProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex);
 
-            public static void Execute(ref JobParallelForProducer<T> jobParallelForProducer, IntPtr additionalData,
+            public static unsafe void Execute(ref JobParallelForProducer<T> jobParallelForProducer, IntPtr additionalData,
                 IntPtr bufferRangePatchData, ref JobRanges ranges, int jobIndex)
             {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
@@ -211,8 +215,7 @@ namespace Unity.Jobs
                         break;
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-                    // TODO https://unity3d.atlassian.net/browse/DOTSR-282
-                    //JobsUtility.PatchBufferMinMaxRanges(IntPtr.Zero, UnsafeUtility.AddressOf(ref jobData), begin, end - begin);
+                    JobsUtility.PatchBufferMinMaxRanges(IntPtr.Zero, UnsafeUtility.AddressOf(ref jobParallelForProducer), begin, end - begin);
 #endif
                     for (var i = begin; i < end; ++i)
                     {
@@ -221,6 +224,7 @@ namespace Unity.Jobs
                 }
             }
         }
+
 
         public static unsafe JobHandle Schedule<T>(this T jobData, int arrayLength, int innerloopBatchCount, JobHandle dependsOn = default(JobHandle))
             where T : struct, IJobParallelFor

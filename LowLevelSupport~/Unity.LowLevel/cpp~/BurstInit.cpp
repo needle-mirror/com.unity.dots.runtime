@@ -134,30 +134,62 @@ extern "C" DLLEXPORT void burst_abort(const char* exceptionName, const char* err
 
 typedef const void* (*BurstInitializeCallbackDelegate)(const char* name);
 
+
+//todo: move to platforms repo when platforms gets easier to deal with,
+//and/or this code stabilizes more
+#if UNITY_IOS
+extern "C" void* Staticburst_initialize(BurstInitializeCallbackDelegate cb);
+#endif
+
 typedef void(*BurstInitializeDelegate)(BurstInitializeCallbackDelegate callback);
 
-extern "C" DLLEXPORT void BurstInit()
+
+void BurstInit_iOS()
 {
-#if UNITY_WEBGL
-	//burst is disabled on webgl
-	return;
-#else
+#if UNITY_IOS // avoid linker errors
+    Staticburst_initialize(NativeGetExternalFunctionPointerCallback);
+#endif
+}
+
+void BurstInit_Desktop()
+{
     functionNameToPointer["burst_abort"] = (void*)burst_abort;
     auto library = loadLibrary("lib_burst_generated");
+
     if (library == NULL)
     {
+#if DEBUG
+        printf("ERROR: failed to load lib_burst_generated shared library.\n");
+        fflush(stdout);
+#endif //DEBUG
         return;
     }
 
     auto burstInit = (BurstInitializeDelegate)loadFn(library, "burst.initialize");
+
     if (burstInit != NULL)
-    {
         burstInit(NativeGetExternalFunctionPointerCallback);
-    }
-    else {
+    else
+    {
+#if DEBUG
         printf("ERROR: Couldn't find method burst.initialize in lib_burst_generated.dll\n");
         fflush(stdout);
+#endif //DEBUG
     }
-#endif
+    
+}
+
+
+
+extern "C" DLLEXPORT void BurstInit()
+{
+#if UNITY_WEBGL || UNITY_ANDROID
+	//burst is disabled on webgl & android
+    return;
+#elif UNITY_IOS
+    BurstInit_iOS();
+#else 
+    BurstInit_Desktop();
+#endif //UNITY_IOS
 }
 

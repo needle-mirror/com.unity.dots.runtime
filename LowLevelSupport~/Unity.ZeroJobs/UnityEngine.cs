@@ -1,13 +1,12 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-#if DEBUG && !UNITY_WEBGL
-using Unity.Development;
+#if ENABLE_PLAYERCONNECTION
+using Unity.Development.PlayerConnection;
 #endif
 #if !NET_DOTS
 using System.Text.RegularExpressions;
 #endif
-
 
 namespace UnityEngine
 {
@@ -41,8 +40,8 @@ namespace UnityEngine
         [Conditional("DEBUG")]
         private static void LogInternal(string message)
         {
-#if DEBUG && !UNITY_WEBGL
-            PlayerConnectionLogger.Log(message);
+#if ENABLE_PLAYERCONNECTION
+            Logger.Log(message);
 #endif
             Console.WriteLine(message);
         }
@@ -118,6 +117,11 @@ namespace UnityEngine
         [DllImport("lib_unity_zerojobs")]
         public static extern long Time_GetTicksMicrosecondsMonotonic();
 
+        // This isn't necessarily obsolete, but it seems to be the best way to mark something as "please don't use!"
+        // while still maintaining compatibility with lots of pre-existing code.
+        // Many times the float value is too large to have a digit change even per second. timeAsDouble MUST be
+        // used to avoid bugs in code.
+        [Obsolete("(DoNotRemove)")]
         public static float time => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0f;
 
         public static double timeAsDouble => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0;

@@ -2,34 +2,34 @@ using JetBrains.Annotations;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Platforms;
-using Unity.Properties.Editor;
+using Unity.Properties.UI;
 using UnityEditor.UIElements;
 using UnityEngine.UIElements;
 
 namespace Unity.Entities.Runtime.Build
 {
     [UsedImplicitly]
-    sealed class BuildTargetInspector : IInspector<BuildTarget>
+    sealed class BuildTargetInspector : Inspector<BuildTarget>
     {
         PopupField<BuildTarget> m_TargetPopup;
 
-        public VisualElement Build(InspectorContext<BuildTarget> context)
+        public override VisualElement Build()
         {
             m_TargetPopup = new PopupField<BuildTarget>(GetAvailableTargets(), 0, GetDisplayName, GetDisplayName)
             {
-                label = context.PrettyName
+                label = DisplayName
             };
 
             m_TargetPopup.RegisterValueChangedCallback(evt =>
             {
-                context.Data = evt.newValue;
+                Target = evt.newValue;
             });
             return m_TargetPopup;
         }
 
-        public void Update(InspectorContext<BuildTarget> proxy)
+        public override void Update()
         {
-            m_TargetPopup.SetValueWithoutNotify(proxy.Data);
+            m_TargetPopup.SetValueWithoutNotify(Target);
         }
 
         static List<BuildTarget> GetAvailableTargets() => BuildTarget.AvailableBuildTargets.Where(target => !target.HideInBuildTargetPopup).ToList();

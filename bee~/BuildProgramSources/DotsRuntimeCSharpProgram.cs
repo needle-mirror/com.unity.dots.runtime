@@ -98,11 +98,12 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
     {
         FileName = name + (isExe ? ".exe" : ".dll");
 
-        Framework.Add(c=> ShouldTargetTinyCorlib(c, this),Bee.DotNet.Framework.FrameworkNone);
-        References.Add(c=>ShouldTargetTinyCorlib(c, this),Il2Cpp.TinyCorlib);
-        
-        Framework.Add(c=>!ShouldTargetTinyCorlib(c, this),Bee.DotNet.Framework.Framework471);
-        References.Add(c=>!ShouldTargetTinyCorlib(c, this), new SystemReference("System"));
+        Framework.Add(c => GetTargetFramework(c, this) == TargetFramework.Tiny, Bee.DotNet.Framework.FrameworkNone);
+        References.Add(c => GetTargetFramework(c, this) == TargetFramework.Tiny, Il2Cpp.TinyCorlib);
+
+        Framework.Add(
+            c => GetTargetFramework(c, this) == TargetFramework.NetStandard20,
+            BuildProgram.HackedFrameworkToUseForProjectFilesIfNecessary);
         
         ProjectFile.Path = DeterminePathForProjectFile();
 
@@ -220,13 +221,30 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             p.Files()
                 .Where(f => f.HasExtension("jpg", "png", "wav", "mp3", "jpeg", "mp4", "webm", "ogg", "ttf", "json"))));
         
-        Defines.Add(c => c.CodeGen == CSharpCodeGen.Debug || (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration < DotsConfiguration.Release, "DEBUG");
+        Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).EnableUnityCollectionsChecks, "ENABLE_UNITY_COLLECTIONS_CHECKS");
 
-        Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration) c).EnableUnityCollectionsChecks, "ENABLE_UNITY_COLLECTIONS_CHECKS");
+        bool isConfigDebug(CSharpProgramConfiguration c) =>
+            c.CodeGen == CSharpCodeGen.Debug || (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration < DotsConfiguration.Release;
+        Defines.Add(isConfigDebug, "DEBUG");
+
+        // Temporary until we support webgl player connection
+        bool isWebGl(CSharpProgramConfiguration c) => ((DotsRuntimeCSharpProgramConfiguration)c).Platform is WebGLPlatform;
+
+        bool isConfigProfilerEnabled(CSharpProgramConfiguration c) => ((DotsRuntimeCSharpProgramConfiguration)c).EnableProfiler;
+        Defines.Add(c => isConfigProfilerEnabled(c), "ENABLE_PROFILER");
+
+        Defines.Add(c => (isConfigDebug(c) || isConfigProfilerEnabled(c)) && !isWebGl(c), "ENABLE_PLAYERCONNECTION");
 
         Defines.Add(
             c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.TinyIl2cpp,
             "UNITY_DOTSPLAYER_IL2CPP");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration).EnableManagedDebugging &&
+                         (c as DotsRuntimeCSharpProgramConfiguration).ScriptingBackend == ScriptingBackend.TinyIl2cpp,
+                         "UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration).EnableManagedDebugging &&
+                         (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger &&
+                         (c as DotsRuntimeCSharpProgramConfiguration).ScriptingBackend == ScriptingBackend.TinyIl2cpp,
+            "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.Dotnet, "UNITY_DOTSPLAYER_DOTNET");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Defines ?? new List<string>());
 
@@ -260,38 +278,49 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         if (NativeProgram != null)
             return NativeProgram;
 
-        var libname = "lib_"+new NPath(FileName).FileNameWithoutExtension.ToLower().Replace(".","_");
+        var libname = "lib_" + new NPath(FileName).FileNameWithoutExtension.ToLower().Replace(".", "_");
         NativeProgram = new NativeProgram(libname);
         
-        NativeProgram.DynamicLinkerSettingsForMac().Add(c => c.WithInstallName(libname + ".dylib"));
-        NativeProgram.DynamicLinkerSettingsForIos().Add(c => c.WithInstallName("@executable_path/Frameworks/" + libname + ".dylib"));
-        NativeProgram.IncludeDirectories.Add(BuildProgram.BeeRootValue.Combine("cppsupport/include"));
-
-        //lets always add a dummy cpp file, in case this nativeprogram is only used to carry other libraries
-        NativeProgram.Sources.Add(BuildProgram.BeeRootValue.Combine("cppsupport/dummy.cpp"));
-
-        NativeProgram.Defines.Add(c => c.Platform is WebGLPlatform, "UNITY_WEBGL=1");
-        NativeProgram.Defines.Add(c => c.Platform is WindowsPlatform, "UNITY_WINDOWS=1");
-        NativeProgram.Defines.Add(c => c.Platform is MacOSXPlatform, "UNITY_MACOSX=1");
-        NativeProgram.Defines.Add(c => c.Platform is LinuxPlatform, "UNITY_LINUX=1");
-        NativeProgram.Defines.Add(c => c.Platform is IosPlatform, "UNITY_IOS=1");
-        NativeProgram.Defines.Add(c => c.Platform is AndroidPlatform, "UNITY_ANDROID=1");
-
+        SetupDotsRuntimeNativeProgram(libname, NativeProgram);
         // sigh
         NativeProgram.Defines.Add("BUILD_" + MainSourcePath.FileName.ToUpper().Replace(".", "_") + "=1");
-
-        NativeProgram.Defines.Add(c => c.CodeGen == CodeGen.Debug, "DEBUG=1");
         
-        NativeProgram.Defines.Add("BINDGEM_DOTS=1");
-
         return NativeProgram;
     }
 
-    protected virtual bool ShouldTargetTinyCorlib(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
+    public static void SetupDotsRuntimeNativeProgram(string libname, NativeProgram np)
     {
-        return true;
+        np.DynamicLinkerSettingsForMac().Add(c => c.WithInstallName(libname + ".dylib"));
+        np.DynamicLinkerSettingsForIos()
+            .Add(c => c.WithInstallName("@executable_path/Frameworks/" + libname + ".dylib"));
+        np.IncludeDirectories.Add(BuildProgram.BeeRootValue.Combine("cppsupport/include"));
+
+        //lets always add a dummy cpp file, in case this np is only used to carry other libraries
+        np.Sources.Add(BuildProgram.BeeRootValue.Combine("cppsupport/dummy.cpp"));
+
+        np.Defines.Add(c => c.Platform is WebGLPlatform, "UNITY_WEBGL=1");
+        np.Defines.Add(c => c.Platform is WindowsPlatform, "UNITY_WINDOWS=1");
+        np.Defines.Add(c => c.Platform is MacOSXPlatform, "UNITY_MACOSX=1");
+        np.Defines.Add(c => c.Platform is LinuxPlatform, "UNITY_LINUX=1");
+        np.Defines.Add(c => c.Platform is IosPlatform, "UNITY_IOS=1");
+        np.Defines.Add(c => c.Platform is AndroidPlatform, "UNITY_ANDROID=1");
+        np.Defines.Add(c => c.CodeGen == CodeGen.Debug, "DEBUG=1");
+
+        np.Defines.Add("BINDGEM_DOTS=1");
+        np.Defines.Add(c =>
+                ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging &&
+                ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.WaitForManagedDebugger,
+            "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
     }
     
+    protected virtual TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
+    {
+        if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
+            return dotsConfig.TargetFramework;
+
+        return TargetFramework.Tiny;
+    }
+
     public override DotNetAssembly SetupSpecificConfiguration(CSharpProgramConfiguration config)
     {
         EnsureNativeProgramLinksToReferences();
@@ -417,11 +446,19 @@ public enum ScriptingBackend
     Dotnet
 }
 
+public enum TargetFramework
+{
+    Tiny,
+    NetStandard20
+}
+
 public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfiguration
 {
     public DotsRuntimeNativeProgramConfiguration NativeProgramConfiguration { get; set; }
 
     public ScriptingBackend ScriptingBackend { get; }
+
+    public TargetFramework TargetFramework { get; }
 
     public DotsConfiguration DotsConfiguration { get; }
 
@@ -437,6 +474,8 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
     
     public bool MultiThreadedJobs { get; private set; }
     
+    public bool EnableProfiler { get; }
+
     public bool UseBurst { get; }
 
     private string _identifier { get; set; }
@@ -447,14 +486,17 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
         ToolChain nativeToolchain,
         ScriptingBackend scriptingBackend,
+        TargetFramework targetFramework,
         string identifier,
         bool enableUnityCollectionsChecks,
         bool enableManagedDebugging,
+        bool waitForManagedDebugger,
         bool multiThreadedJobs,
         DotsConfiguration dotsConfiguration,
+        bool enableProfiler,
         bool useBurst,
         NativeProgramFormat executableFormat = null,
-        IEnumerable<string> defines = null, 
+        IEnumerable<string> defines = null,
         NPath finalOutputDirectory = null)
         : base(
             csharpCodegen,
@@ -472,9 +514,12 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         EnableUnityCollectionsChecks = enableUnityCollectionsChecks;
         DotsConfiguration = dotsConfiguration;
         MultiThreadedJobs = multiThreadedJobs;
+        EnableProfiler = enableProfiler;
         UseBurst = useBurst;
         EnableManagedDebugging = enableManagedDebugging;
+        WaitForManagedDebugger = waitForManagedDebugger;
         ScriptingBackend = scriptingBackend;
+        TargetFramework = targetFramework;
         Defines = defines?.ToList();
         FinalOutputDirectory = finalOutputDirectory;
     }
@@ -483,6 +528,7 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
     public override string Identifier => _identifier;
     public bool EnableUnityCollectionsChecks { get; }
     public bool EnableManagedDebugging { get; }
+    public bool WaitForManagedDebugger { get; }
 
     public DotsRuntimeCSharpProgramConfiguration WithMultiThreadedJobs(bool value) => MultiThreadedJobs == value ? this : With(c=>c.MultiThreadedJobs = value);
     public DotsRuntimeCSharpProgramConfiguration WithIdentifier(string value) => Identifier == value ? this : With(c=>c._identifier = value);

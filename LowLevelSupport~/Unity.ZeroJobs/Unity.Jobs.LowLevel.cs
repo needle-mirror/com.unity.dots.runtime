@@ -81,12 +81,6 @@ namespace Unity.Jobs.LowLevel.Unsafe
         public Type ProducerType => throw new NotImplementedException();
     }
 
-    public sealed class JobInferredTypeAttribute : Attribute
-    {
-        public JobInferredTypeAttribute(Type inferredType) => throw new NotImplementedException();
-        public Type ProducerType => throw new NotImplementedException();
-    }
-
     public static class JobsUtility
     {
 #if UNITY_SINGLETHREADED_JOBS
@@ -99,7 +93,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
 #endif
         public const int CacheLineSize = 64;
 
-        public static bool JobCompilerEnabled => false;
+        public static bool JobCompilerEnabled => true;
         public static bool JobDebuggerEnabled => false;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -332,6 +326,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
         {
             return UnsafeUtility.GetInJob() > 0;
         }
+        public static void Shutdown() {}
 #endif
 
 
@@ -698,10 +693,19 @@ namespace Unity.Jobs.LowLevel.Unsafe
             return jobHandle;
         }
 
-        public static unsafe void PatchBufferMinMaxRanges(IntPtr bufferRangePatchData, void* jobdata, int startIndex,
-            int rangeSize)
+        public struct MinMax
         {
-            // TODO https://unity3d.atlassian.net/browse/DOTSR-282
+            public int Min;
+            public int Max;
+        }
+
+        public static unsafe MinMax PatchBufferMinMaxRanges(IntPtr bufferRangePatchData, void* jobdata, int startIndex, int rangeSize)
+        {
+            return new MinMax
+            {
+                Min = startIndex,
+                Max = startIndex + rangeSize - 1
+            };
         }
     }
 
