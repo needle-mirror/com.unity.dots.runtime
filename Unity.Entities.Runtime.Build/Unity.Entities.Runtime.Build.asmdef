@@ -7,7 +7,6 @@
         "Unity.Build.Editor",
         "Unity.Build.Internals",
         "Unity.Collections",
-        "Unity.Dots.TestRunner.Editor",
         "Unity.Entities",
         "Unity.Entities.Hybrid",
         "Unity.Entities.Runtime",
@@ -37,11 +36,6 @@
             "name": "com.unity.entities",
             "expression": "(0.4.0-preview.10,)",
             "define": "USE_INCREMENTAL_CONVERSION"
-        }, 
-        {
-            "name": "com.unity.dots.testrunner",
-            "expression": "0.0",
-            "define": "DOTS_TEST_RUNNER"
         }
     ],
     "noEngineReferences": false

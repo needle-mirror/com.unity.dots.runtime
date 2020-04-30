@@ -115,7 +115,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             //var asmdefDotsProgram = (arg as AsmDefCSharpProgram)?.AsmDefDescription ?? AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities.CPlusPlus");
             return ProjectFile.ReferenceMode.ByCSProj;
         };
-        
+
         LanguageVersion = "7.3";
         Defines.Add(
             "UNITY_DOTSPLAYER",
@@ -126,10 +126,10 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             "UNITY_2019_2_OR_NEWER",
             "UNITY_2019_3_OR_NEWER"
         );
-        
+
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSPLAYER32");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 64, "UNITY_DOTSPLAYER64");
-		
+
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WebGLPlatform, "UNITY_WEBGL");
         Defines.Add(c =>(c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WindowsPlatform, "UNITY_WINDOWS");
         Defines.Add(c =>(c as DotsRuntimeCSharpProgramConfiguration)?.Platform is MacOSXPlatform, "UNITY_MACOSX");
@@ -156,11 +156,13 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         foreach (var sourcePath in AllSourcePaths)
         {
             var cppFolder = sourcePath.Combine("cpp~");
+            var androidFolder = sourcePath.Combine("android~");
             var prejsFolder = sourcePath.Combine("prejs~");
             var jsFolder = sourcePath.Combine("js~");
             var postjsFolder = sourcePath.Combine("postjs~");
             var beeFolder = sourcePath.Combine("bee~");
             var includeFolder = cppFolder.Combine("include");
+            var bindingsFolder = sourcePath.Combine("bindings~");
 
             if (cppFolder.DirectoryExists())
             {
@@ -171,6 +173,8 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
                 var mmFiles = cppFolder.Files("*.m*", true);
                 GetOrMakeNativeProgram().Sources.Add(c => (c.Platform is MacOSXPlatform || c.Platform is IosPlatform), mmFiles);
+
+                GetOrMakeNativeProgram().DynamicLinkerSettingsForAndroid().Add(c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration == DotsConfiguration.Release, l => l.WithStripAll(true));
 
                 hasCpp = true;
             }
@@ -208,42 +212,68 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
             if (includeFolder.DirectoryExists())
                 GetOrMakeNativeProgram().PublicIncludeDirectories.Add(includeFolder);
+
+            if (bindingsFolder.DirectoryExists())
+            {
+                NativeJobsPrebuiltLibrary.AddBindings(this, bindingsFolder);
+            }
+
+            if (androidFolder.DirectoryExists())
+            {
+                foreach (var extraFile in androidFolder.Files(true).Where(f => f.HasExtension("java", "kt", "aar", "jar")))
+                {
+                    SupportFiles.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is AndroidPlatform, new DeployableFile(extraFile, extraFile.RelativeTo(androidFolder)));
+                }
+            }
         }
 
         if (hasCpp)
         {
             GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is LinuxPlatform, new SystemLibrary("rt"));
             GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is WindowsPlatform, new SystemLibrary("ws2_32.lib"));
-            NativeJobsPrebuiltLibrary.Add(GetOrMakeNativeProgram());
+            NativeJobsPrebuiltLibrary.AddToNativeProgram(GetOrMakeNativeProgram());
         }
 
         SupportFiles.Add(AllSourcePaths.SelectMany(p =>
             p.Files()
                 .Where(f => f.HasExtension("jpg", "png", "wav", "mp3", "jpeg", "mp4", "webm", "ogg", "ttf", "json"))));
-        
+
         Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).EnableUnityCollectionsChecks, "ENABLE_UNITY_COLLECTIONS_CHECKS");
 
         bool isConfigDebug(CSharpProgramConfiguration c) =>
             c.CodeGen == CSharpCodeGen.Debug || (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration < DotsConfiguration.Release;
         Defines.Add(isConfigDebug, "DEBUG");
 
-        // Temporary until we support webgl player connection
-        bool isWebGl(CSharpProgramConfiguration c) => ((DotsRuntimeCSharpProgramConfiguration)c).Platform is WebGLPlatform;
-
         bool isConfigProfilerEnabled(CSharpProgramConfiguration c) => ((DotsRuntimeCSharpProgramConfiguration)c).EnableProfiler;
-        Defines.Add(c => isConfigProfilerEnabled(c), "ENABLE_PROFILER");
 
-        Defines.Add(c => (isConfigDebug(c) || isConfigProfilerEnabled(c)) && !isWebGl(c), "ENABLE_PLAYERCONNECTION");
+        // The profiler + managed debugging with IL2CPP makes the player really slow. If both are enabled, managed
+        // debugging should be enabled, but the profiler will not be enabled.
+        Defines.Add(c =>
+        {
+            if (IsManagedDebuggingWithIL2CPPEnabled(c))
+            {
+                Errors.PrintWarning("The profiler cannot be enabled with managed debugging and IL2CPP. The profiler will be disabled for this build.");
+                return false;
+            }
+            return isConfigProfilerEnabled(c);
+        }, "ENABLE_PROFILER");
+
+        // Only enable player connection when we need it
+        // - To support logging ("debug" builds)
+        // - To support profiling
+        // - To support il2cpp managed debugging (multicast)
+        Defines.Add(c => isConfigDebug(c) || isConfigProfilerEnabled(c) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_PLAYERCONNECTION");
+
+        // Multicasting
+        // - Is a supplement to player connection in non-webgl builds
+        // - Is needed for identification in webgl builds, too, if il2cpp managed debugging is enabled
+        Defines.Add(c => !((c as DotsRuntimeCSharpProgramConfiguration).Platform is WebGLPlatform) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_MULTICAST");
 
         Defines.Add(
             c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.TinyIl2cpp,
             "UNITY_DOTSPLAYER_IL2CPP");
-        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration).EnableManagedDebugging &&
-                         (c as DotsRuntimeCSharpProgramConfiguration).ScriptingBackend == ScriptingBackend.TinyIl2cpp,
-                         "UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER");
-        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration).EnableManagedDebugging &&
-                         (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger &&
-                         (c as DotsRuntimeCSharpProgramConfiguration).ScriptingBackend == ScriptingBackend.TinyIl2cpp,
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c), "UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER");
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c) && (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger,
             "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.Dotnet, "UNITY_DOTSPLAYER_DOTNET");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Defines ?? new List<string>());
@@ -251,8 +281,14 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         ProjectFile.RedirectMSBuildBuildTargetToBee = true;
         ProjectFile.AddCustomLinkRoot(MainSourcePath, ".");
         ProjectFile.RootNameSpace = "";
-        
+
         DotsRuntimeCSharpProgramCustomizer.RunAllCustomizersOn(this);
+    }
+
+    private static bool IsManagedDebuggingWithIL2CPPEnabled(CSharpProgramConfiguration c)
+    {
+        return (c as DotsRuntimeCSharpProgramConfiguration).EnableManagedDebugging &&
+               (c as DotsRuntimeCSharpProgramConfiguration).ScriptingBackend == ScriptingBackend.TinyIl2cpp;
     }
 
     protected virtual NPath DeterminePathForProjectFile()
@@ -311,6 +347,12 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
                 ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging &&
                 ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.WaitForManagedDebugger,
             "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
+
+        //we don't want to do this for c#, because then burst sees different code from the unbursted path and it's very
+        //easy and tempting to go insane this way. but for native, it's fine, since burst
+        //doesn't see that directly. and also, it enables us to error when we don't find the burst dll when burst is on, 
+        //and not look for it when it's off. 
+        np.Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.UseBurst, "ENABLE_UNITY_BURST=1");
     }
     
     protected virtual TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)

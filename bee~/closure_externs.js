@@ -13,3 +13,10 @@ that Closure can perform, and needing to use externs can suggest we have structu
  * @suppress {duplicate, undefinedVars}
  */
 var UT_ASSETS;
+
+// fatal is a function defined in tiny_shell.html, that file is outside Closure's minification boundary, so references there need to
+// be declared as externs.
+/**
+ * @suppress {duplicate, undefinedVars}
+ */
+var fatal = function(msg) {};

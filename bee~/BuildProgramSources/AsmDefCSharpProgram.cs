@@ -9,7 +9,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     public DotsRuntimeCSharpProgram[] ReferencedPrograms { get; }
     public AsmDefDescription AsmDefDescription { get; }
 
-    // We don't have the ability to have asmdef references which are required by Hybrid but are incompatible 
+    // We don't have the ability to have asmdef references which are required by Hybrid but are incompatible
     // with DOTS Runtime. So we manually remove them here for now :(
     string[] IncompatibleDotRuntimeAsmDefs =
     {
@@ -31,7 +31,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
         var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") ||
                     asmDefDescription.Name.EndsWith(".Tests");
-        
+
         Construct(asmDefDescription.Name, isExe);
 
         ProjectFile.AdditionalFiles.Add(asmDefDescription.Path);
@@ -62,11 +62,25 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
         if (IsTestAssembly)
         {
-            References.Add(BuildProgram.NUnitFramework);
+            // Set true to build the Portable runner on dotnet (instead of the NUnit runner).
+            // Normally the portable runner is only used for IL2CPP, but debugging the tests
+            // and runner is easier on dotnet.
+            bool usePortableRunnerOnDotNet = false;
+
             var nunitLiteMain = BuildProgram.BeeRoot.Combine("CSharpSupport/NUnitLiteMain.cs");
             Sources.Add(nunitLiteMain);
+
+            // Setup for IL2CPP
+            var tinyTestFramework = BuildProgram.BeeRoot.Parent.Combine("TinyTestFramework");
+            Sources.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || usePortableRunnerOnDotNet , tinyTestFramework);
+            Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || usePortableRunnerOnDotNet , "UNITY_PORTABLE_TEST_RUNNER");
+
+            // Setup for dotnet
+            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && !usePortableRunnerOnDotNet , BuildProgram.NUnitFramework);
             ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");
-            References.Add(BuildProgram.NUnitLite);
+            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && !usePortableRunnerOnDotNet , BuildProgram.NUnitLite);
+
+            // General setup
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities")));
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.Core")));
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.UnityInstance")));
@@ -74,14 +88,14 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
         else if(IsILPostProcessorAssembly)
         {
             References.Add(BuildProgram.UnityCompilationPipeline);
-            References.Add(StevedoreUnityCecil.Paths);
+            References.Add(MonoCecil.Paths);
             References.Add(Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"));
         }
     }
 
     public override bool IsSupportedFor(CSharpProgramConfiguration config)
     {
-        //UNITY_DOTS_ENTRYPOINT is actually a fake define constraint we use to signal the buildsystem, 
+        //UNITY_DOTS_ENTRYPOINT is actually a fake define constraint we use to signal the buildsystem,
         //so don't impose it as a constraint
         return base.IsSupportedFor(config) &&
                AsmDefDescription.DefineConstraints.All(dc =>
@@ -90,8 +104,11 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
     protected override TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
     {
-        if (DoesTargetFullDotNet || IsTestAssembly || IsILPostProcessorAssembly)
+        if (DoesTargetFullDotNet || IsILPostProcessorAssembly ||
+            (IsTestAssembly && ((DotsRuntimeCSharpProgramConfiguration)config).ScriptingBackend == ScriptingBackend.Dotnet))
+        {
             return TargetFramework.NetStandard20;
+        }
 
         return base.GetTargetFramework(config, program);
     }
@@ -114,8 +131,8 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     }
 
     protected override NPath DeterminePathForProjectFile() =>
-        DoesPackageSourceIndicateUserHasControlOverSource(AsmDefDescription.PackageSource) 
-            ? AsmDefDescription.Path.Parent.Combine(AsmDefDescription.Name + ".gen.csproj") 
+        DoesPackageSourceIndicateUserHasControlOverSource(AsmDefDescription.PackageSource)
+            ? AsmDefDescription.Path.Parent.Combine(AsmDefDescription.Name + ".gen.csproj")
             : base.DeterminePathForProjectFile();
 
     public bool IsTestAssembly => AsmDefDescription.OptionalUnityReferences.Contains("TestAssemblies");

@@ -84,12 +84,15 @@ namespace Unity.Entities.Runtime.Build
                 WorkingDirectory = workingDirectory,
 #if !UNITY_EDITOR_WIN
                 // bee requires external programs to perform build actions
-                EnvironmentVariables = new Dictionary<string, string>() { {"PATH", string.Join(":",
-                    Path.Combine(UnityEditor.EditorApplication.applicationContentsPath,
-                        "MonoBleedingEdge/bin"),
-                    "/bin",
-                    "/usr/bin",
-                    "/usr/local/bin")} },
+                EnvironmentVariables = new Dictionary<string, string>()
+                {
+                    {"PATH", string.Join(":",
+                        Path.Combine(UnityEditor.EditorApplication.applicationContentsPath,
+                            "MonoBleedingEdge/bin"),
+                        "/bin",
+                        "/usr/bin",
+                        "/usr/local/bin")}
+                },
 #else
                 EnvironmentVariables = null,
 #endif
@@ -139,7 +142,7 @@ namespace Unity.Entities.Runtime.Build
             public bool Failed => !Succeeded;
             public string Command { get; }
             public string Output { get; }
-            public string Error => Failed ? Output.TrimStart("##### Output").TrimStart('\n', '\r') : string.Empty;
+            public string Error => Failed? Output.TrimStart("##### Output").TrimStart('\n', '\r') : string.Empty;
 
             public BeeRunResult(int exitCode, string command, string output)
             {

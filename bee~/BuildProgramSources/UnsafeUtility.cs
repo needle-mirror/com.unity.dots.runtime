@@ -50,7 +50,7 @@ class UnsafeUtility
                 References =
                 {
                     ReferenceAssemblies471.Paths,
-                    StevedoreUnityCecil.Paths,
+                    MonoCecil.Paths,
                 },
                 LanguageVersion = "7.3"
             }.SetupDefault();

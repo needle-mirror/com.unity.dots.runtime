@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using UnityEngine.Assertions;
 #if ENABLE_PLAYERCONNECTION
 using Unity.Development.PlayerConnection;
 #endif
@@ -77,15 +78,23 @@ namespace UnityEngine
 
     public class Component {}
 
+    // A very simple placeholder implementation for the tests.
     public class Random
     {
-        public static void InitState(int state)
-        {
+        static uint seed = 1337;
+
+        static int Rand() {
+            // Xorshift
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            return (int)seed;
         }
 
         public static int Range(int one, int two)
         {
-            return one;
+            Assert.IsTrue(two >= one);
+            return one + Rand() % (two + 1 - one);
         }
     }
 

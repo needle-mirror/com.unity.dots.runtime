@@ -4,7 +4,7 @@ namespace Unity.Entities.Runtime.Hashing
     {
         public static unsafe uint ComputeHash32(byte[] bytes, uint seed = 0)
         {
-            fixed (void* src = bytes)
+            fixed(void* src = bytes)
             {
                 return MurmurHash3_x86_32(src, bytes?.Length ?? 0, seed);
             }
@@ -12,7 +12,7 @@ namespace Unity.Entities.Runtime.Hashing
 
         public static unsafe byte[] ComputeHash128(byte[] bytes, uint seed = 0)
         {
-            fixed (void* src = bytes)
+            fixed(void* src = bytes)
             {
                 return MurmurHash3_x64_128(src, bytes?.Length ?? 0, seed);
             }
@@ -28,6 +28,7 @@ namespace Unity.Entities.Runtime.Hashing
         {
             return MurmurHash3_x64_128(stream, seed);
         }
+
 #endif
 
         #region Implementation
@@ -105,7 +106,8 @@ namespace Unity.Entities.Runtime.Hashing
                     k1 *= c2;
                     h1 ^= k1;
                     break;
-            };
+            }
+            ;
 
             // Finalization
             h1 ^= (uint)len;
@@ -211,7 +213,8 @@ namespace Unity.Entities.Runtime.Hashing
                     k1 *= c2;
                     h1 ^= k1;
                     break;
-            };
+            }
+            ;
 
             // Finalization
             h1 ^= (ulong)len;
@@ -224,7 +227,7 @@ namespace Unity.Entities.Runtime.Hashing
             h2 += h1;
 
             var result = new byte[16];
-            fixed (byte* ptr = result)
+            fixed(byte* ptr = result)
             {
                 ((ulong*)ptr)[0] = h1;
                 ((ulong*)ptr)[1] = h2;
@@ -396,13 +399,14 @@ namespace Unity.Entities.Runtime.Hashing
             h2 += h1;
 
             var result = new byte[16];
-            fixed (byte* ptr = result)
+            fixed(byte* ptr = result)
             {
                 ((ulong*)ptr)[0] = h1;
                 ((ulong*)ptr)[1] = h2;
             }
             return result;
         }
+
 #endif
 
         #endregion

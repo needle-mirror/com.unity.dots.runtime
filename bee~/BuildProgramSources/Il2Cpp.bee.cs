@@ -112,6 +112,9 @@ public static class Il2Cpp
             this.DynamicLinkerSettingsForEmscripten().Add(c =>
                 c.WithShellFile(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_shell.html")));
 
+            this.DynamicLinkerSettingsForAndroid().Add(c =>
+                ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration == DotsConfiguration.Release, l => l.WithStripAll(true));
+
             Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
@@ -126,7 +129,7 @@ public static class Il2Cpp
             this.CompilerSettingsForMsvc().Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
             CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
             this.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
-            NativeJobsPrebuiltLibrary.Add(this); // Only required for managed debugging
+            NativeJobsPrebuiltLibrary.AddToNativeProgram(this); // Only required for managed debugging
         }
 
 
@@ -561,7 +564,7 @@ public static class Il2Cpp
         program.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
         
         // Use Baselib headers and library code from the NativeJobs library.
-        NativeJobsPrebuiltLibrary.Add(program);
+        NativeJobsPrebuiltLibrary.AddToNativeProgram(program);
 
         //program.CompilerSettingsForMsvc().Add(l => l.WithCompilerRuntimeLibrary(CompilerRuntimeLibrary.None));
 

@@ -1,8 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
-using Unity.Build.Internals;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Analytics;
@@ -46,7 +45,7 @@ namespace Unity.Entities.Runtime.Build
                         if (s_OnceHashCodes.Add(trace.GetHashCode()))
                         {
                             // TODO sanitize 'trace' to remove personal filenames and such
-                            SendErrorEvent("__uncaught__", condition/*, trace*/);
+                            SendErrorEvent("__uncaught__", condition /*, trace*/);
                         }
                     }
                 };
@@ -56,7 +55,7 @@ namespace Unity.Entities.Runtime.Build
         [InitializeOnLoadMethod]
         static void Initialize()
         {
-            BuildPipelineInternals.BuildCompleted += (result) => SendBuildEvent(result);
+            BuildProcess.BuildCompleted += (result) => SendBuildEvent(result);
         }
 
         static bool RegisterEvents()
@@ -105,7 +104,7 @@ namespace Unity.Entities.Runtime.Build
             Console.WriteLine(message);
         }
 
-        static BuildAnalyticsTypes.AnalyticsEventCommon CreateCommon(BuildPipelineResult result = null)
+        static BuildAnalyticsTypes.AnalyticsEventCommon CreateCommon(BuildResult result = null)
         {
             return new BuildAnalyticsTypes.AnalyticsEventCommon()
             {
@@ -117,7 +116,7 @@ namespace Unity.Entities.Runtime.Build
             };
         }
 
-        static BuildAnalyticsTypes.ContextInfo CreateContextInfo(BuildPipelineResult result)
+        static BuildAnalyticsTypes.ContextInfo CreateContextInfo(BuildResult result)
         {
             var ci = new BuildAnalyticsTypes.ContextInfo();
 #if UNITY_INTERNAL
@@ -137,7 +136,7 @@ namespace Unity.Entities.Runtime.Build
             return ci;
         }
 
-        static BuildAnalyticsTypes.ProjectInfo CreateProjectInfo(BuildPipelineResult result)
+        static BuildAnalyticsTypes.ProjectInfo CreateProjectInfo(BuildResult result)
         {
             if (result == null)
                 return default;
@@ -235,7 +234,7 @@ namespace Unity.Entities.Runtime.Build
             Send(BuildAnalyticsTypes.EventName.dotsRuntime, e);
         }
 
-        internal static void SendBuildEvent(BuildPipelineResult result)
+        internal static void SendBuildEvent(BuildResult result)
         {
             if (!result.BuildConfiguration.HasComponent<DotsRuntimeBuildProfile>())
                 return;
@@ -271,4 +270,3 @@ namespace Unity.Entities.Runtime.Build
         }
     }
 }
-

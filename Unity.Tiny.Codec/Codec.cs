@@ -24,7 +24,7 @@ namespace Unity.Tiny.Codec
         /// <returns></returns>
         static public unsafe int CompressUpperBound(Codec codec, int size)
         {
-            switch(codec)
+            switch (codec)
             {
                 case Codec.None: return size;
                 case Codec.LZ4:  return CompressBoundLZ4(size);
@@ -44,10 +44,10 @@ namespace Unity.Tiny.Codec
         static public unsafe int Compress(Codec codec, in byte* src, int srcSize, out byte* dst, Allocator allocator = Allocator.Temp)
         {
             int boundedSize = CompressUpperBound(codec, srcSize);
-            dst = (byte*) UnsafeUtility.Malloc(boundedSize, 16, allocator);
+            dst = (byte*)UnsafeUtility.Malloc(boundedSize, 16, allocator);
 
             int compressedSize = 0;
-            switch(codec)
+            switch (codec)
             {
                 case Codec.LZ4: compressedSize = CompressLZ4(src, dst, srcSize, boundedSize); break;
 
@@ -106,4 +106,3 @@ namespace Unity.Tiny.Codec
 #endif
     }
 }
-

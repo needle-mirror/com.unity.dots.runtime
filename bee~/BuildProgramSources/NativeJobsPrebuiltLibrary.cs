@@ -11,8 +11,11 @@ using Unity.BuildSystem.NativeProgramSupport;
 public static class NativeJobsPrebuiltLibrary
 {
     private static Dictionary<String, NPath> ArtifactPaths = new Dictionary<String, NPath>();
+    private static bool UseLocalDev => Environment.GetEnvironmentVariable("NATIVEJOBS_FROM_LOCAL", EnvironmentVariableTarget.User) != null;
+    private static NPath LocalDevRoot = BuildProgram.BeeRoot.Parent.Parent.Parent.Parent.Parent.Combine("nativejobs");
 
-    private static NPath GetOrCreateArtifactPath(String name) {
+    private static NPath GetOrCreateSteveArtifactPath(String name)
+    {
         if (!ArtifactPaths.ContainsKey(name))
         {
             var artifact = new StevedoreArtifact(name);
@@ -22,8 +25,8 @@ public static class NativeJobsPrebuiltLibrary
 
         return ArtifactPaths[name];
     }
-    
-    public static string BaselibArchitectureName(NativeProgramConfiguration npc)
+
+    private static string GetNativeJobsReleaseArchName(NativeProgramConfiguration npc)
     {
         // We need to detect which emscripten backend to use on web builds, but it is only available if the 
         // com.unity.platforms.web package is in the project manifest. Otherwise, we just default to false
@@ -55,17 +58,23 @@ public static class NativeJobsPrebuiltLibrary
         throw new InvalidProgramException($"Unknown toolchain and architecture for baselib: {npc.ToolChain.LegacyPlatformIdentifier} {npc.ToolChain.Architecture.Name}");
     }
 
-    public static void Add(NativeProgram np)
+    private static string GetNativeJobsConfigName(NativeProgramConfiguration npc)
     {
-        var allPlatforms = new []
-        {
-            "Android",
-            "Linux",
-            "Windows",
-            "OSX",
-            "IOS",
-            "WebGL"
-        };
+        var dotsrtCSharpConfig = ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig;
+
+        // If collection checks have been forced on in a release build, swap in the develop version of the native jobs prebuilt lib
+        // as the release configuration will not contain the collection checks code paths.
+        if (dotsrtCSharpConfig.EnableUnityCollectionsChecks && dotsrtCSharpConfig.DotsConfiguration == DotsConfiguration.Release)
+            return DotsConfiguration.Develop.ToString().ToLower();
+
+        return dotsrtCSharpConfig.DotsConfiguration.ToString().ToLower();
+    }
+
+    private static NPath GetLibPath(NativeProgramConfiguration c)
+    {
+        var tinyEmType = Type.GetType("TinyEmscripten");
+        bool useWasmBackend = (bool)(tinyEmType?.GetProperty("UseWasmBackend")?.GetValue(tinyEmType) ?? false);
+        bool useWebGlThreading = false;
 
         var staticPlatforms = new[]
         {
@@ -73,55 +82,57 @@ public static class NativeJobsPrebuiltLibrary
             "WebGL",
         };
 
-        np.IncludeDirectories.Add(GetOrCreateArtifactPath("nativejobs-all-public").Combine("Include"));
-
-        DotsConfiguration DotsConfig(NativeProgramConfiguration npc)
+        if (UseLocalDev)
         {
-            var dotsrtCSharpConfig = ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig;
-
-            // If collection checks have been forced on in a release build, swap in the develop version of the native jobs prebuilt lib
-            // as the release configuration will not contain the collection checks code paths.
-            if (dotsrtCSharpConfig.EnableUnityCollectionsChecks && dotsrtCSharpConfig.DotsConfiguration == DotsConfiguration.Release)
-                return DotsConfiguration.Develop;
-
-            return dotsrtCSharpConfig.DotsConfiguration;
+            return LocalDevRoot.Combine("artifacts", "nativejobs", GetNativeJobsConfigName(c) + "_" + c.ToolChain.ActionName.ToLower() +
+                (c.Platform.Name == "WebGL" && !useWasmBackend ? "_fc" : "") + (useWebGlThreading ? "_withthreads" : "") + "_nonlump" +
+                (staticPlatforms.Contains(c.Platform.Name) ? "" : "_dll"));
         }
 
-        foreach (var platform in allPlatforms)
+        var prebuiltLibPath = GetOrCreateSteveArtifactPath($"nativejobs-{c.Platform.Name}" + (staticPlatforms.Contains(c.Platform.Name) ? "-s" : "-d"));
+        return prebuiltLibPath.Combine("lib", c.Platform.Name.ToLower(), GetNativeJobsReleaseArchName(c), GetNativeJobsConfigName(c));
+    }
+
+    public static void AddToNativeProgram(NativeProgram np)
+    {
+        np.PublicDefines.Add("BASELIB_USE_DYNAMICLIBRARY=1");
+        np.PublicDefines.Add(c => c.Platform is IosPlatform, "FORCE_PINVOKE_nativejobs_INTERNAL=1");
+
+        if (UseLocalDev)
         {
-            var prebuiltLibPath = GetOrCreateArtifactPath($"nativejobs-{platform}" + (staticPlatforms.Contains(platform) ? "-s" : "-d"));
+            np.IncludeDirectories.Add(LocalDevRoot.Combine("External", "baselib", "Include"));
+            np.IncludeDirectories.Add(c => LocalDevRoot.Combine("External", "baselib", "Platforms", c.Platform.Name, "Include"));
+        }
+        else
+        {
+            np.IncludeDirectories.Add(GetOrCreateSteveArtifactPath("nativejobs-all-public").Combine("Include"));
+            np.IncludeDirectories.Add(c => GetOrCreateSteveArtifactPath($"nativejobs-{c.Platform.Name}-public").Combine("Platforms", c.Platform.Name, "Include"));
+        }
 
-            np.PublicDefines.Add(c => c.Platform.Name == platform, "BASELIB_USE_DYNAMICLIBRARY=1");
-            np.IncludeDirectories.Add(c => c.Platform.Name == platform, GetOrCreateArtifactPath($"nativejobs-{platform}-public").Combine("Platforms", platform, "Include"));
+        np.Libraries.Add(c => c.Platform.Name == "Windows", c => new PrecompiledLibrary[] {
+                new MsvcDynamicLibrary(GetLibPath(c).Combine("nativejobs.dll")),
+                new StaticLibrary(GetLibPath(c).Combine("nativejobs.dll.lib")) });
+        np.Libraries.Add(c => c.Platform.Name == "Linux" || c.Platform.Name == "Android", c => new[] {
+                new DynamicLibrary(GetLibPath(c).Combine("libnativejobs.so")) });
+        np.Libraries.Add(c => c.Platform.Name == "OSX", c => new[] {
+                new DynamicLibrary(GetLibPath(c).Combine("libnativejobs.dylib")) });
+        np.Libraries.Add(c => c.Platform.Name == "IOS", c => new[] {
+                new StaticLibrary(GetLibPath(c).Combine("libnativejobs.a")) });
+        np.Libraries.Add(c => c.Platform.Name == "WebGL", c => new[] {
+                new StaticLibrary(GetLibPath(c).Combine("libnativejobs.bc")) });
+    }
 
-            switch (platform)
-            {
-                case "Windows":
-                    np.Libraries.Add(c => c.Platform.Name == platform,
-                        c => new PrecompiledLibrary[] { 
-                            new MsvcDynamicLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "nativejobs.dll")),
-                            new StaticLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "nativejobs.dll.lib")),
-                        });
-                    break;
-                case "Linux":
-                case "Android":
-                    np.Libraries.Add(c => c.Platform.Name == platform,
-                        c => new[] { new DynamicLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "libnativejobs.so")) });
-                    break;
-                case "OSX":
-                    np.Libraries.Add(c => c.Platform.Name == platform,
-                        c => new[] { new DynamicLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "libnativejobs.dylib")) });
-                    break;
-                case "IOS":
-                    np.Libraries.Add(c => c.Platform.Name == platform,
-                        c => new[] { new StaticLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "libnativejobs.a")) });
-                    np.PublicDefines.Add(c => c.Platform.Name == platform, "FORCE_PINVOKE_nativejobs_INTERNAL=1");
-                    break;
-                case "WebGL":
-                    np.Libraries.Add(c => c.Platform.Name == platform,
-                        c => new[] { new StaticLibrary(prebuiltLibPath.Combine("lib", platform.ToLower(), BaselibArchitectureName(c), DotsConfig(c).ToString().ToLower(), "libnativejobs.bc")) });
-                    break;
-            }
+    public static void AddBindings(DotsRuntimeCSharpProgram csp, NPath defaultPath)
+    {
+        if (UseLocalDev)
+        {
+            csp.Sources.Add(LocalDevRoot.Combine("External", "baselib", "CSharp", "BindingsPinvoke"));
+            csp.Sources.Add(LocalDevRoot.Combine("External", "baselib", "CSharp", "Error.cs"));
+            csp.Sources.Add(LocalDevRoot.Combine("External", "baselib", "CSharp", "ManualBindings.cs"));
+        }
+        else
+        {
+            csp.Sources.Add(defaultPath);
         }
     }
 }

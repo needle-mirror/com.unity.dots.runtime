@@ -388,6 +388,7 @@ namespace Unity.Collections.LowLevel.Unsafe
             {
                 if (handle.nodePtr == null)
                     return;
+
                 if (handle.nodeLocalPtr != null)
                     throw new Exception("Code-gen created a duplicate PatchLocal. This is bug.");
 
@@ -418,6 +419,9 @@ namespace Unity.Collections.LowLevel.Unsafe
 
                 if (handle.nodeLocalPtr == null)
                     return;
+
+                if ((handle.nodeLocalPtr->flags & AtomicSafetyNodeFlags.Magic) != 0)
+                    throw new Exception("UnpatchLocal called, but safety handle was never patched with PatchLocal! This is a codegen bug.");
 
                 UnsafeUtility.Free(handle.nodeLocalPtr, Allocator.TempJob);
                 handle.nodeLocalPtr = null;

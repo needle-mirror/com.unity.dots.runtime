@@ -21,20 +21,11 @@ namespace Unity.Collections
     [NativeContainer]
     [NativeContainerSupportsMinMaxWriteRestriction]
     [NativeContainerSupportsDeallocateOnJobCompletion]
-//    [NativeContainerSupportsDeferredConvertListToArray]
+    [NativeContainerSupportsDeferredConvertListToArray]
     [DebuggerDisplay("Length = {Length}")]
     [DebuggerTypeProxy(typeof(NativeArrayDebugView<>))]
     public unsafe struct NativeArray<T> : IDisposable, IEnumerable<T>, IEquatable<NativeArray<T>> where T : struct
     {
-        internal void* Buffer
-        {
-            get
-            {
-                ResolveDeferredList();
-                return m_Buffer;
-            }
-        }
-
         [NativeDisableUnsafePtrRestriction]
         internal void*                    m_Buffer;
         internal int                      m_Length;
@@ -105,25 +96,12 @@ namespace Unity.Collections
 #endif
         }
 
-        public int Length
-        {
-            get
-            {
-                ResolveDeferredList();
-                return m_Length;
-            }
-        }
-
-        private static bool IsUnmanagedData<Q>()
-        {
-            // we have no good way of doing this with the dots tiny profile (but we need to!)
-            return true;
-        }
+        public int Length => m_Length;
 
         [BurstDiscard]
         internal static void IsUnmanagedAndThrow()
         {
-            if (!IsUnmanagedData<T>())
+            if (!UnsafeUtility.IsValidNativeContainerElementType<T>())
             {
                 throw new InvalidOperationException(
                     $"{typeof(T)} used in NativeArray<{typeof(T)}> must be unmanaged (contain no managed types) and cannot itself be a native container type.");
@@ -134,7 +112,6 @@ namespace Unity.Collections
         void CheckElementReadAccess(int index)
         {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            ResolveDeferredList();
             if (index < m_MinIndex || index > m_MaxIndex)
                 FailOutOfRangeError(index);
 
@@ -149,7 +126,6 @@ namespace Unity.Collections
         void CheckElementWriteAccess(int index)
         {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            ResolveDeferredList();
             if (index < m_MinIndex || index > m_MaxIndex)
                 FailOutOfRangeError(index);
 
@@ -166,7 +142,7 @@ namespace Unity.Collections
             get
             {
                 CheckElementReadAccess(index);
-                return UnsafeUtility.ReadArrayElement<T>(Buffer, index);
+                return UnsafeUtility.ReadArrayElement<T>(m_Buffer, index);
             }
 
             [WriteAccessRequired]
@@ -174,36 +150,7 @@ namespace Unity.Collections
             set
             {
                 CheckElementWriteAccess(index);
-                UnsafeUtility.WriteArrayElement(Buffer, index, value);
-            }
-        }
-
-#pragma warning disable 649
-        unsafe struct NativeListData
-        {
-            public void* buffer;
-            public int   length;
-            public int   capacity;
-        }
-#pragma warning restore 649
-
-        void ResolveDeferredList()
-        {
-            var bufferAddress = (long)m_Buffer;
-
-            // We use the first bit of the pointer to infer that the array is in list mode
-            // Thus the job scheduling code will need to patch it.
-            if ((bufferAddress & 1) != 0)
-            {
-                var listData = UnsafeUtility.AsRef<NativeListData>((void*)(bufferAddress & ~1));
-
-                m_Buffer = listData.buffer;
-                m_Length = listData.length;
-
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-                m_MinIndex = 0;
-                m_MaxIndex = listData.length - 1;
-#endif
+                UnsafeUtility.WriteArrayElement(m_Buffer, index, value);
             }
         }
 
@@ -212,21 +159,25 @@ namespace Unity.Collections
         [WriteAccessRequired]
         public void Dispose()
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-
-            if (!UnsafeUtility.IsValidAllocator(m_AllocatorLabel))
+            if (m_AllocatorLabel == Allocator.Invalid)
+            {
                 throw new InvalidOperationException("The NativeArray can not be Disposed because it was not allocated with a valid allocator.");
+            }
 
-            DisposeSentinel.Dispose(ref m_Safety, ref m_DisposeSentinel);
+            if (m_Buffer == null)
+            {
+                throw new InvalidOperationException("The NativeArray is already disposed.");
+            }
+
+            if (m_AllocatorLabel > Allocator.None)
+            {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                DisposeSentinel.Dispose(ref m_Safety, ref m_DisposeSentinel);
 #endif
-            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
-            m_Buffer = null;
-            m_Length = 0;
-        }
+                UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
+                m_AllocatorLabel = Allocator.Invalid;
+            }
 
-        void Deallocate()
-        {
-            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
             m_Buffer = null;
             m_Length = 0;
         }
@@ -244,23 +195,50 @@ namespace Unity.Collections
         /// the container.</returns>
         public JobHandle Dispose(JobHandle inputDeps)
         {
+            if (m_AllocatorLabel == Allocator.Invalid)
+            {
+                throw new InvalidOperationException("The NativeArray can not be Disposed because it was not allocated with a valid allocator.");
+            }
+
+            if (m_Buffer == null)
+            {
+                throw new InvalidOperationException("The NativeArray is already disposed.");
+            }
+
+            if (m_AllocatorLabel > Allocator.None)
+            {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            // [DeallocateOnJobCompletion] is not supported, but we want the deallocation
-            // to happen in a thread. DisposeSentinel needs to be cleared on main thread.
-            // AtomicSafetyHandle can be destroyed after the job was scheduled (Job scheduling
-            // will check that no jobs are writing to the container).
-            DisposeSentinel.Clear(ref m_DisposeSentinel);
+                // [DeallocateOnJobCompletion] is not supported, but we want the deallocation
+                // to happen in a thread. DisposeSentinel needs to be cleared on main thread.
+                // AtomicSafetyHandle can be destroyed after the job was scheduled (Job scheduling
+                // will check that no jobs are writing to the container).
+                DisposeSentinel.Clear(ref m_DisposeSentinel);
 
-            var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety } }.Schedule(inputDeps);
+                var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety } }.Schedule(inputDeps);
 
-            AtomicSafetyHandle.Release(m_Safety);
+                AtomicSafetyHandle.Release(m_Safety);
 #else
-            var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel } }.Schedule(inputDeps);
+                var jobHandle = new NativeArrayDisposeJob { Data = new NativeArrayDispose { m_Buffer = m_Buffer, m_AllocatorLabel = m_AllocatorLabel } }.Schedule(inputDeps);
 #endif
+
+                m_Buffer = null;
+                m_Length = 0;
+                m_AllocatorLabel = Allocator.Invalid;
+
+                return jobHandle;
+            }
+
             m_Buffer = null;
             m_Length = 0;
 
-            return jobHandle;
+            return inputDeps;
+        }
+
+        void Deallocate()
+        {
+            UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
+            m_Buffer = null;
+            m_Length = 0;
         }
 
         [WriteAccessRequired]
@@ -357,7 +335,7 @@ namespace Unity.Collections
 
         public bool Equals(NativeArray<T> other)
         {
-            return Buffer == other.Buffer && m_Length == other.m_Length;
+            return m_Buffer == other.m_Buffer && m_Length == other.m_Length;
         }
 
         public override bool Equals(object obj)
@@ -370,7 +348,7 @@ namespace Unity.Collections
         {
             unchecked
             {
-                return ((int)Buffer * 397) ^ m_Length;
+                return ((int)m_Buffer * 397) ^ m_Length;
             }
         }
 
@@ -459,8 +437,8 @@ namespace Unity.Collections
 
 #endif
             UnsafeUtility.MemCpy(
-                (byte*)dst.Buffer + dstIndex * UnsafeUtility.SizeOf<T>(),
-                (byte*)src.Buffer + srcIndex * UnsafeUtility.SizeOf<T>(),
+                (byte*)dst.m_Buffer + dstIndex * UnsafeUtility.SizeOf<T>(),
+                (byte*)src.m_Buffer + srcIndex * UnsafeUtility.SizeOf<T>(),
                 length * UnsafeUtility.SizeOf<T>());
         }
 
@@ -492,7 +470,7 @@ namespace Unity.Collections
             var addr = handle.AddrOfPinnedObject();
 
             UnsafeUtility.MemCpy(
-                (byte*)dst.Buffer + dstIndex * UnsafeUtility.SizeOf<T>(),
+                (byte*)dst.m_Buffer + dstIndex * UnsafeUtility.SizeOf<T>(),
                 (byte*)addr + srcIndex * UnsafeUtility.SizeOf<T>(),
                 length * UnsafeUtility.SizeOf<T>());
 
@@ -528,7 +506,7 @@ namespace Unity.Collections
 
             UnsafeUtility.MemCpy(
                 (byte*)addr + dstIndex * UnsafeUtility.SizeOf<T>(),
-                (byte*)src.Buffer + srcIndex * UnsafeUtility.SizeOf<T>(),
+                (byte*)src.m_Buffer + srcIndex * UnsafeUtility.SizeOf<T>(),
                 length * UnsafeUtility.SizeOf<T>());
 
             handle.Free();
@@ -573,20 +551,20 @@ namespace Unity.Collections
         public U ReinterpretLoad<U>(int sourceIndex) where U : struct
         {
             CheckReinterpretLoadRange<U>(sourceIndex);
-            byte* src_ptr = ((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * sourceIndex;
+            byte* src_ptr = ((byte*)m_Buffer) + UnsafeUtility.SizeOf<T>() * sourceIndex;
             return UnsafeUtility.ReadArrayElement<U>(src_ptr, 0);
         }
 
         public void ReinterpretStore<U>(int destIndex, U data) where U : struct
         {
             CheckReinterpretStoreRange<U>(destIndex);
-            byte* dst_ptr = ((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * destIndex;
+            byte* dst_ptr = ((byte*)m_Buffer) + UnsafeUtility.SizeOf<T>() * destIndex;
             UnsafeUtility.WriteArrayElement<U>(dst_ptr, 0, data);
         }
 
         private NativeArray<U> InternalReinterpret<U>(int length) where U : struct
         {
-            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<U>(Buffer, length, m_AllocatorLabel);
+            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<U>(m_Buffer, length, m_AllocatorLabel);
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref result, m_Safety);
@@ -652,7 +630,7 @@ namespace Unity.Collections
                 throw new ArgumentOutOfRangeException(nameof(length), $"sub array range {start}-{start+length-1} is outside the range of the native array 0-{Length-1}");
             }
 #endif
-            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<T>(((byte*)Buffer) + UnsafeUtility.SizeOf<T>() * start, length, Allocator.Invalid);
+            var result = NativeArrayUnsafeUtility.ConvertExistingDataToNativeArray<T>(((byte*)m_Buffer) + UnsafeUtility.SizeOf<T>() * start, length, Allocator.Invalid);
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             NativeArrayUnsafeUtility.SetAtomicSafetyHandle(ref result, m_Safety);
@@ -664,9 +642,9 @@ namespace Unity.Collections
         public ReadOnly AsReadOnly()
         {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            return new ReadOnly(Buffer, m_Length, ref m_Safety);
+            return new ReadOnly(m_Buffer, m_Length, ref m_Safety);
 #else
-            return new ReadOnly(Buffer, m_Length);
+            return new ReadOnly(m_Buffer, m_Length);
 #endif
         }
 
@@ -687,12 +665,14 @@ namespace Unity.Collections
                 m_Length = length;
                 m_Safety = safety;
             }
+
 #else
             internal ReadOnly(void* buffer, int length)
             {
                 m_Buffer = buffer;
                 m_Length = length;
             }
+
 #endif
 
             public T this[int index]
@@ -708,15 +688,44 @@ namespace Unity.Collections
             void CheckElementReadAccess(int index)
             {
                 if (index < 0
-                &&  index >= m_Length)
+                    &&  index >= m_Length)
                 {
                     throw new IndexOutOfRangeException($"Index {index} is out of range (must be between 0 and {m_Length-1}).");
                 }
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-//                int version = m_Safety.UncheckedGetNodeVersion();
-//                if (m_Safety.version != (version & AtomicSafetyHandle.ReadCheck))
-//                    AtomicSafetyHandle.CheckReadAndThrowNoEarlyOut(m_Safety);
+                int version = m_Safety.UncheckedGetNodeVersion();
+                if (m_Safety.version != (version & AtomicSafetyNodeVersionMask.VersionAndReadProtect))
+                    AtomicSafetyHandle.CheckReadAndThrow(m_Safety);
+#endif
+            }
+        }
+
+        // Used by jobs codegen to handle the result of a NativeList.AsDeferredJobArray
+        // TODO it sucks that every NativeArray<T> has its own version of this method;
+        // but NativeArray<T> might be unmanaged due to DisposeSentinel.  So we can't just
+        // overlay a bare struct on it.  We *could* create an UnsafeNativeArray, just like
+        // there's UnafeList, that doesn't include the DiposeSentinel.
+        unsafe void ResolveDeferredConvertListToArray()
+        {
+            var bufferAddress = (long) m_Buffer;
+
+            // We use the first bit of the pointer to infer that the array is in list mode
+            // Thus the job scheduling code will need to patch it.
+            // this &1 contract comes from NativeList.AsDeferredJobArray
+            //
+            // TODO -- this deferred List to Array logic should really live in UnsafeList.  It can have internals
+            // access to NativeArray so it can do this munging, so that all the logic lives in one place.
+            if ((bufferAddress & 1) != 0)
+            {
+                var listData = (Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility.NativeListData*) (bufferAddress & ~1);
+
+                m_Buffer = listData->buffer;
+                m_Length = listData->length;
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                m_MinIndex = 0;
+                m_MaxIndex = listData->length - 1;
 #endif
             }
         }
@@ -821,7 +830,7 @@ namespace Unity.Collections.LowLevel.Unsafe
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.CheckWriteAndThrow(nativeArray.m_Safety);
 #endif
-            return nativeArray.Buffer;
+            return nativeArray.m_Buffer;
         }
 
         public static unsafe void* GetUnsafeReadOnlyPtr<T>(this NativeArray<T> nativeArray) where T : struct
@@ -829,12 +838,23 @@ namespace Unity.Collections.LowLevel.Unsafe
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.CheckReadAndThrow(nativeArray.m_Safety);
 #endif
-            return nativeArray.Buffer;
+            return nativeArray.m_Buffer;
         }
 
         public static unsafe void* GetUnsafeBufferPointerWithoutChecks<T>(NativeArray<T> nativeArray) where T : struct
         {
-            return nativeArray.Buffer;
+            return nativeArray.m_Buffer;
         }
+
+        // Used by deferred list to array.  We can't access UnsafeList directly because Unity.ZeroJobs doesn't
+        // link to collections.
+#pragma warning disable 649
+        internal unsafe struct NativeListData
+        {
+            internal void* buffer;
+            internal int length;
+            internal int capacity;
+        }
+#pragma warning restore 649
     }
 }

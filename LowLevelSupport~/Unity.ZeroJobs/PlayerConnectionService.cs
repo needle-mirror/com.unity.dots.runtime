@@ -137,21 +137,26 @@ namespace Unity.Development.PlayerConnection
 
     internal static class EditorPorts
     {
-        // Game initiates connection to Unity
+        // Game initiates connection to Unity Editor
         // - Good for localhost
-        // - Good for external Unity host's IP if known
+        // - Good for external Unity Editor host's IP if known
         public const ushort DirectConnect = 34999;
 
-        // Manually initiated from Unity
+        // Manually initiated from Unity Editor
+        //   or Automatically initiated from Unity Editor after a current-session multicast is received
         // (Unity attempts a range of 512 ports when user manually initiates connection)
         // - Good for custom IPs such as mobile or web
         public const ushort DirectListenFirst = 55000;
         public const ushort DirectListenLast = 55511;
 
-        // Automatically initiated from Unity
+        // Automatically initiated from Unity Editor
         // (We must broadcast first with a specifically formatted message to notify we are a valid target for connection)
-        // - Good for local networks, REQUIRED for locally served web builds
+        // - Best choice for local networks or localhost
         public const ushort Multicast = 54997;
+
+        // Unity Websockify proxy-server listens on this port to initiate a connection
+        // to the TCP socket port for 'DirectConnect' above
+        public const ushort WebSocketProxy = 54998;
     }
 
     // Unused messages are commented out while we sort out what is relevant
@@ -189,6 +194,24 @@ namespace Unity.Development.PlayerConnection
         //public static readonly UnityGuid kProfilerSetMarkerFiltering = new UnityGuid("18207525e148469ea059ec2cdfb026a5");
     }
 
+    // Multicast is used to announce our existence to the local network - especially to Unity Editor. It can also be useful, for instance, for
+    // debuggers to know about us.
+    //
+    // Multicast should always be enabled if player connection is enabled in non-web builds. Multicast's main purpose is to support
+    // the editor initiating a connection to us automatically in development builds.
+    //
+    // However, in web builds, since there is
+    // a) no UDP in WebSockets and 
+    // b) no listening for WebSockets connections therefore no auto-connection from the Editor
+    // we disable multicasting.
+    //
+    // SIDE NOTE:
+    // IL2CPP managed debugging uses multicasting even on web through it is not supported by normal WebSockets. Support for this
+    // is provided through a posix-sockets emulation layer by a WebSockets based proxy-server included with Emscripten. As mentioned in a later
+    // comment, this manner of translation is too slow to be used for profiler, livelink, etc, and so we do not take "advantage"
+    // of it for the general case here.
+
+#if ENABLE_MULTICAST
     // This is used inside Connection directly
     internal class Multicast
     {
@@ -346,6 +369,7 @@ namespace Unity.Development.PlayerConnection
             broadcastCountdown = kBroadcastCounter;
         }
     }
+#endif
 
     public class Connection
     {
@@ -387,18 +411,35 @@ namespace Unity.Development.PlayerConnection
 
         private static bool serviceInitialized = false;
 
+#if !UNITY_WEBGL
         private static Baselib_Socket_Handle hSocket = Baselib_Socket_Handle_Invalid;
         private static Baselib_Socket_Handle hSocketListen = Baselib_Socket_Handle_Invalid;
         private static Baselib_NetworkAddress hAddress;
         private static Baselib_ErrorState errState;
+#endif
 
         private static List<MessageCallback> m_EventMessageList = new List<MessageCallback>();
         private static ConnectionState state = ConnectionState.Init;
 
-#if DEBUG && (UNITY_WINDOWS || UNITY_LINUX || UNITY_MACOSX)
+        // - On desktop, we can auto-connect to Unity Editor because we are on the same host and don't have to guess the IP
+        // - On web, we can only support auto-connect to Unity Editor so it will only work if running on the same host
+        // - On mobile, we are definitively not on the same host, so we must listen for a connection from Unity Editor
+        //
+        // Eventually, all platforms except web will listen because we will be able to multicast to the Editor which will
+        // cause it to auto-connect to us. (This is work in progress and requires an API in the editor to be exposed first
+        // in order to produce the correct multicast message in the player)
+
+#if UNITY_WINDOWS || UNITY_LINUX || UNITY_MACOSX
         private static ConnectionState initType = ConnectionState.ConnectDirect;
         private static string initIp = "127.0.0.1";  // default connect to local host
         private static ushort initPort = (ushort)EditorPorts.DirectConnect;
+#elif UNITY_WEBGL
+#if ENABLE_MULTICAST
+        // Only needed in multicasting scenario if on WEBGL platform
+        private static ConnectionState initType = ConnectionState.ConnectDirect;
+#endif
+        private static string initIp = "ws://127.0.0.1";  // default connect to local host
+        private static ushort initPort = (ushort)EditorPorts.WebSocketProxy;
 #else
         private static ConnectionState initType = ConnectionState.ConnectListenBind;
         private static string initIp = "0.0.0.0";  // default listen on all ip address
@@ -446,6 +487,46 @@ namespace Unity.Development.PlayerConnection
         {
             WSACleanup();
         }
+
+        // While baselib implements its sockets API for web using typical posix calls (berkeley sockets) as supported by Emscripten,
+        // it is very slow. WebGL requires WebSockets which is a layer on top of TCP, but the proxy server which Emscripten provides
+        // actually emulates the posix API from WebSockets messages implemented internally which even let's us use UDP sockets.
+        //
+        // Again, this is very slow, so for large amounts of data such as profiler or live link which are implemented over
+        // player connection, we provide
+        // A) A custom web socket wrapper API designed for use here, specifically
+        // B) A customized websockify which knows about player connection messages
+        //
+        // The following is part A) and part B) is included with Unity Editor's WebGL module
+
+#elif UNITY_WEBGL
+
+        private const string DLL = "__Internal";
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionPlatformInit")]
+        private static extern void PlatformInit();
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionPlatformShutdown")]
+        private static extern void PlatformShutdown();
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionConnect")]
+        private static unsafe extern void WebSocketConnect(byte* serverAddress);
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionDisconnect")]
+        private static extern void WebSocketDisconnect();
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionSend")]
+        private static extern uint WebSocketSend(IntPtr data, int dataByteCount);
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionReceive")]
+        private static extern uint WebSocketReceive(IntPtr buffer, int reqBytes);
+
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionLostConnection")]
+        private static extern int WebSocketLostConnection();
+        
+        [DllImport(DLL, EntryPoint = "js_html_playerconnectionIsConnecting")]
+        private static extern int WebSocketIsConnecting();
+
 #else
         private static void PlatformInit()
         {
@@ -467,7 +548,9 @@ namespace Unity.Development.PlayerConnection
             MessageStreamManager.Initialize();  // must be before initializing senders
 
             UnityEngine.Networking.PlayerConnection.PlayerConnection.instance.Initialize();
+#if ENABLE_MULTICAST
             Multicast.Initialize(initType == ConnectionState.ConnectDirect, initPort);
+#endif
 
             serviceInitialized = true;
         }
@@ -477,7 +560,9 @@ namespace Unity.Development.PlayerConnection
             if (!serviceInitialized)
                 return;
 
+#if ENABLE_MULTICAST
             Multicast.Shutdown();
+#endif
             Disconnect();
 
             UnityEngine.Networking.PlayerConnection.PlayerConnection.instance.Shutdown();
@@ -494,11 +579,14 @@ namespace Unity.Development.PlayerConnection
         {
             initIp = forceIp;
             initPort = forcePort;
+#if !UNITY_WEBGL
             initType = ConnectionState.ConnectDirect;
+#endif
             initRetryCounter = 0;
             Connect();
         }
 
+#if !UNITY_WEBGL
         public static void ConnectListen(string forceIp, ushort forcePort)
         {
             initIp = forceIp;
@@ -507,12 +595,33 @@ namespace Unity.Development.PlayerConnection
             initRetryCounter = 0;
             Connect();
         }
+#endif
 
         public static void Connect()
         {
             if (ConnectionInitialized)
                 return;
 
+#if UNITY_WEBGL
+            if (state == ConnectionState.Init)
+            {
+                if (initRetryCounter > 0)
+                {
+                    initRetryCounter--;
+                    return;
+                }
+
+                unsafe
+                {
+                    fixed (byte* bip = System.Text.Encoding.UTF8.GetBytes(initIp + $":{initPort}"))
+                    {
+                        WebSocketConnect(bip);
+                    }
+                }
+
+                state = ConnectionState.Ready;
+            }
+#else
             if (state == ConnectionState.Init)
             {
                 if (initRetryCounter > 0)
@@ -610,6 +719,7 @@ namespace Unity.Development.PlayerConnection
                     hSocket = Baselib_Socket_Handle_Invalid;
                 }
             }
+#endif
         }
 
         public static void Disconnect()
@@ -619,6 +729,9 @@ namespace Unity.Development.PlayerConnection
             if (state == ConnectionState.Init)
                 return;
 
+#if UNITY_WEBGL
+            WebSocketDisconnect();
+#else
             if (hSocketListen.handle != Baselib_Socket_Handle_Invalid.handle)
             {
                 Baselib_Socket_Close(hSocketListen);
@@ -631,8 +744,10 @@ namespace Unity.Development.PlayerConnection
                 hSocket = Baselib_Socket_Handle_Invalid;
             }
 
-            state = ConnectionState.Init;
             errState.code = Baselib_ErrorCode.Success;
+#endif
+
+            state = ConnectionState.Init;
 
             MessageStreamManager.RecycleAll();
             bufferReceive.RecycleAndFreeExtra();
@@ -641,7 +756,9 @@ namespace Unity.Development.PlayerConnection
         [MonoPInvokeCallback]
         public static void TransmitAndReceive()
         {
+#if ENABLE_MULTICAST
             Multicast.Broadcast(initType == ConnectionState.ConnectDirect, initPort);
+#endif
             Connect();
 
             if (!Connected)
@@ -651,34 +768,43 @@ namespace Unity.Development.PlayerConnection
                 return;
             }
 
-            // Check if we lost connection
+            // Check if got disconnected
+#if UNITY_WEBGL
+            if (WebSocketLostConnection() == 1)
+#else
             Baselib_Socket_PollFd pollFd = new Baselib_Socket_PollFd();
             unsafe
             {
                 pollFd.handle.handle = hSocket.handle;
-                pollFd.errorState = (Baselib_ErrorState*) UnsafeUtility.AddressOf(ref errState);
+                pollFd.errorState = (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState);
                 pollFd.requestedEvents = Baselib_Socket_PollEvents.Connected;
 
-                Baselib_Socket_Poll(&pollFd, 1, 0, (Baselib_ErrorState*) UnsafeUtility.AddressOf(ref errState));
+                Baselib_Socket_Poll(&pollFd, 1, 0, (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
             };
-            
-            // Check if got disconnected
+
             if (errState.code != Baselib_ErrorCode.Success)
+#endif
             {
                 Disconnect();
                 return;
             }
 
             // Disconnection didn't occur, but we could still be waiting on a connection 
+#if UNITY_WEBGL
+            if (WebSocketIsConnecting() == 1)
+#else
             if (pollFd.resultEvents != Baselib_Socket_PollEvents.Connected)
+#endif
+            {
                 return;
+            }
 
             MessageStreamManager.TrySubmitAll();
             Receive();
 
             if (!Connected)
                 return;
-            
+
             Transmit();
         }
 
@@ -699,10 +825,15 @@ namespace Unity.Development.PlayerConnection
                 MessageStream.MessageStreamBuffer* bufferWrite = bufferReceive.BufferWrite;
 
                 int bytesAvail = bufferWrite->Capacity - bufferWrite->Size;
+#if UNITY_WEBGL
+                uint actualWritten = WebSocketReceive(bufferWrite->Buffer + bufferWrite->Size,
+                    bytesNeeded <= bytesAvail ? bytesNeeded : bytesAvail);
+                if (actualWritten == 0xffffffff)
+#else
                 uint actualWritten = Baselib_Socket_TCP_Recv(hSocket, bufferWrite->Buffer + bufferWrite->Size,
                     (uint)(bytesNeeded <= bytesAvail ? bytesNeeded : bytesAvail), (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
-
                 if (errState.code != Baselib_ErrorCode.Success)
+#endif
                 {
                     // Something bad happened; lost connection maybe?
                     // After cleaning up, next time we will try to re-initialize
@@ -784,8 +915,13 @@ namespace Unity.Development.PlayerConnection
 
                 while (bufferRead != null)
                 {
+#if UNITY_WEBGL
+                    uint actualRead = WebSocketSend(bufferRead->Buffer + offset, bufferRead->Size - offset);
+                    if (actualRead == 0xffffffff)
+#else
                     uint actualRead = Baselib_Socket_TCP_Send(hSocket, bufferRead->Buffer + offset, (uint)(bufferRead->Size - offset), (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
                     if (errState.code != Baselib_ErrorCode.Success)
+#endif
                     {
                         // Something bad happened; lost connection maybe?
                         // After cleaning up, next time we will try to re-initialize
@@ -796,7 +932,7 @@ namespace Unity.Development.PlayerConnection
 
                     if (actualRead == 0)
                     {
-                        // @@todo this needs to actuall flush the buffernodes and go through sendqueue (ones it supports that idea)
+                        // Move the data to be sent to the front of this buffer for next time
                         bufferSend->RecycleRange(bufferRead, offset);
                         return;
                     }

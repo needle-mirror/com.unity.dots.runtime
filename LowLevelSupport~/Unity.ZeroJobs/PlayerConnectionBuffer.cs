@@ -326,6 +326,9 @@ namespace Unity.Development.PlayerConnection
             if (deferredSizePtr == null)
                 throw new InvalidOperationException("Can't patch player connection message header - nothing to patch");
 
+            while ((bufferList->TotalBytes & 3) != 0)
+                WriteData((byte)0);
+
             *deferredSizePtr = bufferList->TotalBytes - deferredSizeStart;
             deferredSizeStart = 0;
             deferredSizePtr = null;

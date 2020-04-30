@@ -53,7 +53,7 @@ static class AsmDefConfigFile
         {
             if (GuidsToAsmDefNames.TryGetValue(nameOrGuid.Substring(5), out var name))
                 return name;
-            Console.WriteLine($"No asmdef found for {nameOrGuid}");
+            //Console.WriteLine($"No asmdef found for {nameOrGuid}");
             return null;
         }
 
@@ -71,7 +71,7 @@ static class AsmDefConfigFile
             return result;
         if (!NotFoundNames.Contains(asmdefname))
         {
-            Console.WriteLine($"No asmdef found for {asmdefname}");
+            //Console.WriteLine($"No asmdef found for {asmdefname}");
             NotFoundNames.Add(asmdefname);
         }
 

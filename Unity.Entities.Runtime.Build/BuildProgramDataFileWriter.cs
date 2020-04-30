@@ -29,7 +29,7 @@ namespace Unity.Entities.Runtime.Build
         {
             [SerializeField] public List<string> testables = null;
         }
-        
+
         public static void WriteAll(string directory,
             string selectedConfig = null)
         {
@@ -44,7 +44,6 @@ namespace Unity.Entities.Runtime.Build
 
         private static void WriteSelectedConfigFile(NPath directory, string selectedConfig)
         {
-
             var file = directory.Combine("selectedconfig.json").MakeAbsolute();
             file.UpdateAllText(JsonSerialization.ToJson(new SelectedConfigJson()
             {
@@ -110,14 +109,14 @@ namespace Unity.Entities.Runtime.Build
                     PackageSource = packageSource
                 });
             }
-            
+
             var projectPath = new NPath(UnityEngine.Application.dataPath).Parent;
             var projectManifestPath = projectPath.Combine("Packages/manifest.json");
             var projectManifest = JsonUtility.FromJson<ProjectManifestJsonObject>(projectManifestPath.MakeAbsolute().ReadAllText());
             List<string> testableAsmDefNames = new List<string>();
             foreach (var testablePackageName in projectManifest.testables)
             {
-                testableAsmDefNames.AddRange(asmdefs.Where(a => a.AsmdefName.EndsWith(".Tests") && a.FullPath.Contains(testablePackageName)).Select(a=>a.AsmdefName));
+                testableAsmDefNames.AddRange(asmdefs.Where(a => a.AsmdefName.EndsWith(".Tests") && a.FullPath.Contains(testablePackageName)).Select(a => a.AsmdefName));
             }
 
             var compilationPipelinePath = new NPath(Path.Combine(EditorApplication.applicationContentsPath, "Managed", "Unity.CompilationPipeline.Common.dll"));
@@ -176,7 +175,6 @@ namespace Unity.Entities.Runtime.Build
                 yield return new NPath(path);
             }
         }
-
 
         private struct BeeAsmdefConfiguration
         {

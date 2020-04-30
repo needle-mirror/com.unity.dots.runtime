@@ -7,26 +7,21 @@ using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(Name = "Export Configuration", Description = "Exporting Configuration", Category = "DOTS")]
-    sealed class BuildStepExportConfiguration : BuildStep
+    [BuildStep(Description = "Exporting Configuration")]
+    sealed class BuildStepExportConfiguration : BuildStepBase
     {
-        public override Type[] RequiredComponents => new[]
+        public override Type[] UsedComponents { get; } =
         {
             typeof(DotsRuntimeBuildProfile),
             typeof(DotsRuntimeRootAssembly),
-            typeof(SceneList)
-        };
-
-        public override Type[] OptionalComponents => new[]
-        {
+            typeof(SceneList),
             typeof(OutputBuildDirectory)
         };
 
         void WriteDebugFile(BuildContext context, BuildManifest manifest, DotsRuntimeBuildProfile profile)
         {
-            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
-            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
-            var targetName = rootAssembly.MakeBeeTargetName(buildConfiguration);
+            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
+            var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
             var outputDir = BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName);
             var debugFile = new NPath(outputDir).Combine("Logs/SceneExportLog.txt");
             var debugAssets = manifest.Assets.OrderBy(x => x.Value)
@@ -52,7 +47,7 @@ namespace Unity.Entities.Runtime.Build
                         TypeManager.GetTypeInfo(TypeManager.GetTypeIndex(t)));
 
                     //Verify if an exported type is included in the output, if not print error message
-                    foreach(TypeManager.TypeInfo exportedType in typesToWrite)
+                    foreach (TypeManager.TypeInfo exportedType in typesToWrite)
                     {
                         if (!rootAssembly.TypeCache.HasType(exportedType.Type))
                             Debug.LogError($"The {exportedType.Type.Name} component is defined in the {exportedType.Type.Assembly.GetName().Name} assembly, but that assembly is not referenced by the current build configuration. Either add it as a reference, or ensure that the conversion process that is adding that component does not run.");
@@ -76,14 +71,13 @@ namespace Unity.Entities.Runtime.Build
             debugFile.MakeAbsolute().WriteAllLines(debugLines.ToArray());
         }
 
-        public override BuildStepResult RunBuildStep(BuildContext context)
+        public override BuildResult Run(BuildContext context)
         {
             var manifest = context.BuildManifest;
-            var buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
-            var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
-            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
-            var targetName = rootAssembly.MakeBeeTargetName(buildConfiguration);
-            var scenes = GetRequiredComponent<SceneList>(context);
+            var profile = context.GetComponentOrDefault<DotsRuntimeBuildProfile>();
+            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
+            var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
+            var scenes = context.GetComponentOrDefault<SceneList>();
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
 
             using (var loadedSceneScope = new LoadedSceneScope(firstScene))
@@ -101,7 +95,7 @@ namespace Unity.Entities.Runtime.Build
                     {
                         ConfigurationSystemBase baseSys = (ConfigurationSystemBase)tmpWorld.GetOrCreateSystem(type);
                         baseSys.projectScene = projectScene;
-                        baseSys.buildConfiguration = buildConfiguration;
+                        baseSys.buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
                         configSystemGroup.AddSystemToUpdateList(baseSys);
                     }
                     configSystemGroup.SortSystemUpdateList();
@@ -121,7 +115,7 @@ namespace Unity.Entities.Runtime.Build
                     WriteDebugFile(context, manifest, profile);
                 }
             }
-            return Success();
+            return context.Success();
         }
     }
 }

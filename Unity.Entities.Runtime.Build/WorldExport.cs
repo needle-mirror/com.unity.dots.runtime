@@ -26,18 +26,18 @@ namespace Unity.Entities.Runtime.Build
                 return false;
             }
 #endif
-            
+
             var directoryName = Path.GetDirectoryName(outputFile.FullName);
             if (string.IsNullOrEmpty(directoryName))
             {
                 throw new ArgumentException($"Invalid output file directory: {directoryName}", nameof(outputFile));
             }
-            
+
             if (!Directory.Exists(directoryName))
             {
                 Directory.CreateDirectory(directoryName);
             }
-             
+
             // Merges the entities and shared component streams, (optionally) compresses them, and finally serializes to disk with a small header in front
             using (var fileStream = new StreamBinaryWriter(outputFile.FullName))
             using (var entitiesWriter = new MemoryBinaryWriter())

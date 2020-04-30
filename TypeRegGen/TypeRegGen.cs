@@ -9,6 +9,7 @@ using Unity.Entities.BuildUtils;
 using MethodAttributes = Mono.Cecil.MethodAttributes;
 using TypeAttributes = Mono.Cecil.TypeAttributes;
 using System.Runtime.CompilerServices;
+using Mono.Cecil.Pdb;
 using Newtonsoft.Json;
 
 namespace Unity.ZeroPlayer
@@ -102,7 +103,7 @@ namespace Unity.ZeroPlayer
             {
                 int index = AssemblyDefinitions.Count;
                 AssemblyDefinitions.Add(knownAssembly);
-                AssemblyNameToIndexMap.Add(knownAssembly.Name .FullName, index);
+                AssemblyNameToIndexMap.Add(knownAssembly.Name.FullName, index);
             }
 
             public override AssemblyDefinition Resolve(AssemblyNameReference name, ReaderParameters parameters)
@@ -152,16 +153,16 @@ namespace Unity.ZeroPlayer
 
             // This call can be removed once IL2CPP supports module initializers
             InjectRegisterAllAssemblyRegistries();
-            
+
             m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_BurstEnabled);
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
             m_interfaceGen.InjectBurstInfrastructureMethods();
 
             ScanAndInjectCustomBootstrap();
-            
-            WriteModifiedAssemblies(in m_interfaceGen.typesToMakePublic);
-            //SaveDebugMeta(typeGenInfoList, m_Systems, m_interfaceGen.jobList);
+
+            WriteModifiedAssemblies(in m_interfaceGen.TypesToMakePublic);
+            //SaveDebugMeta(typeGenInfoList, m_Systems, m_interfaceGen.JobDescList);
 
             assemblyResolver.Dispose();
             m_MscorlibAssembly.Dispose();
@@ -185,15 +186,15 @@ namespace Unity.ZeroPlayer
 
                 foreach (var type in asm.MainModule.GetAllTypes().Where(t => t.IsClass))
                 {
-                    if(type.FullName == "Unity.Entities.CodeGeneratedRegistry.AssemblyTypeRegistry")
+                    if (type.FullName == "Unity.Entities.CodeGeneratedRegistry.AssemblyTypeRegistry")
                     {
-                        asmRegTypeList.Add(type);                         
+                        asmRegTypeList.Add(type);
                     }
                 }
             }
 
             PushNewArray(ref il, registerAssemblyType, asmRegTypeList.Count);
-            for(int i = 0; i < asmRegTypeList.Count; ++i)
+            for (int i = 0; i < asmRegTypeList.Count; ++i)
             {
                 var type = asmRegTypeList[i];
                 var field = m_EntityAssembly.MainModule.ImportReference(type.Fields.First(f => f.Name == "TypeRegistry"));
@@ -205,13 +206,13 @@ namespace Unity.ZeroPlayer
             il.Emit(OpCodes.Call, registerAsmFn);
             il.Emit(OpCodes.Ret);
         }
-        
-                 public void ScanAndInjectCustomBootstrap()
+
+        public void ScanAndInjectCustomBootstrap()
         {
             const string TinyCoreAssemblyName = "Unity.Tiny.Core";
             const string CustomBootstrapName = "Unity.Entities.ICustomBootstrap";
             var tinyCoreAsmDef = m_AssemblyDefs.FirstOrDefault(a => a.Name.Name == TinyCoreAssemblyName);
-            if (tinyCoreAsmDef == null) 
+            if (tinyCoreAsmDef == null)
                 throw new ArgumentException($"Failed to find {TinyCoreAssemblyName} assembly for modifying.");
 
             var customBootstraps = new List<TypeDefinition>();
@@ -234,7 +235,7 @@ namespace Unity.ZeroPlayer
             getBootstrapFn.Body.Instructions.Clear();
             var il = getBootstrapFn.Body.GetILProcessor();
 
-            if(customBootstraps.Count == 0)
+            if (customBootstraps.Count == 0)
                 il.Emit(OpCodes.Ldnull);
             else
             {
@@ -247,7 +248,7 @@ namespace Unity.ZeroPlayer
                 {
                     int bootstrapIndex = 0;
                     int maxDepth = 0;
-                    for(int i = 0; i < customBootstraps.Count; ++i)
+                    for (int i = 0; i < customBootstraps.Count; ++i)
                     {
                         // Note this isn't 100% correct since we aren't checking the depth of the specialization for
                         // types underneath the type implementing ICustomBootstrap. This detail is ignored for now as
@@ -272,21 +273,21 @@ namespace Unity.ZeroPlayer
                 il.Emit(OpCodes.Newobj, bootstrapCtor);
             }
             il.Emit(OpCodes.Ret);
-        } 
-        
+        }
+
         internal static bool DoesTypeInheritInterface(TypeDefinition typeDef, string interfaceName)
         {
             if (typeDef == null)
                 return false;
 
             return (typeDef.Interfaces.Any(i => i.InterfaceType.FullName.Equals(interfaceName)) || (typeDef.BaseType != null && DoesTypeInheritInterface(typeDef.BaseType.Resolve(), interfaceName)));
-        } 
-        
+        }
+
         internal void ProcessArgs(string[] args, AssemblyResolver assemblyResolver, ISymbolReaderProvider symbolReaderProvider)
         {
             int argIndex = 0;
             m_OutputDir = Path.GetFullPath(args[argIndex++]);
-            
+
             var archBitsStr = args[argIndex++];
             var profileStr = args[argIndex++];
             var burstStr = args[argIndex++];
@@ -354,7 +355,7 @@ namespace Unity.ZeroPlayer
 
                 ForceTypeAsPublicRecurse(typeDef.DeclaringType);
             }
-            else if(!typeDef.IsPublic)
+            else if (!typeDef.IsPublic)
             {
                 typeDef.IsPublic = true;
             }
@@ -394,8 +395,8 @@ namespace Unity.ZeroPlayer
         internal static void ForceTypeMembersAsPublic(TypeDefinition typeDef)
         {
             ForceTypeMembersAsPublicRecurse(typeDef);
-        } 
-        
+        }
+
         internal void WriteModifiedAssemblies(in List<TypeDefinition> typesToMakePublic)
         {
             foreach (var type in typesToMakePublic)
@@ -403,18 +404,23 @@ namespace Unity.ZeroPlayer
                 ForceTypeMembersAsPublic(type);
                 ForceTypeAsPublic(type);
             }
-            
+
             // Write out all passed in assemblies
             foreach (var asm in m_AssemblyDefs)
             {
                 string asmPath = asm.MainModule.FileName;
                 string asmFileName = asmPath.Substring(asmPath.LastIndexOf(Path.DirectorySeparatorChar) + 1);
-                if (string.Equals(asmFileName, "mscorlib.dll", StringComparison.OrdinalIgnoreCase) && !m_WriteOutMscorlib)
-                    continue;
+
+                if (!m_WriteOutMscorlib)
+                {
+                    var stdlibNames = new[] {"mscrolib.dll", "netstandard.dll"};
+                    if (stdlibNames.Any(n => n.Equals(asmFileName, StringComparison.InvariantCultureIgnoreCase)))
+                        continue;
+                }
 
                 var outPath = Path.Combine(m_OutputDir, asmFileName);
 
-                var writerParams = new WriterParameters() { WriteSymbols = asm.MainModule.HasSymbols };
+                var writerParams = new WriterParameters() {WriteSymbols = asm.MainModule.HasSymbols};
 
                 try
                 {
@@ -437,11 +443,11 @@ namespace Unity.ZeroPlayer
                             Path.ChangeExtension(outPath, "pdb"),
                             true);
                     }
-                } 
+                }
             }
         }
 
-// This code needs to be ported to an ILPostProcessor and is left here for reference 
+// This code needs to be ported to an ILPostProcessor and is left here for reference
 #if false
         private void SaveDebugMeta(TypeGenInfoList typeGenInfoList, List<TypeDefinition> systemList)
         {
@@ -454,11 +460,9 @@ namespace Unity.ZeroPlayer
 
                 using (var closeA = jw.WriteStartObjectAuto())
                 {
-
                     jw.WritePropertyName("TypeGenInfoList");
                     using (var closeB = jw.WriteStartObjectAuto())
                     {
-
                         for (int i = 0; i < typeGenInfoList.Count; i++)
                         {
                             var typeGenInfo = typeGenInfoList[i];
@@ -469,7 +473,6 @@ namespace Unity.ZeroPlayer
                                 jw.WritePropertyName(typeGenInfo.TypeDefinition.Name);
                             using (var closeC = jw.WriteStartObjectAuto())
                             {
-
                                 // Implicit info
                                 jw.WriteNameValue("Element", i);
 
@@ -497,14 +500,12 @@ namespace Unity.ZeroPlayer
                     jw.WritePropertyName("SystemList");
                     using (var closeB = jw.WriteStartObjectAuto())
                     {
-
                         for (int i = 0; i < systemList.Count; i++)
                         {
                             var sys = systemList[i];
                             jw.WritePropertyName(sys.Name);
                             using (var closeC = jw.WriteStartObjectAuto())
                             {
-
                                 // Implicit info
                                 jw.WriteNameValue("SystemIndex", i);
 
@@ -553,9 +554,9 @@ namespace Unity.ZeroPlayer
                     jw.WritePropertyName("JobList");
                     using (jw.WriteStartObjectAuto())
                     {
-                        for (int i = 0; i < jobList.Count; i++)
+                        for (int i = 0; i < JobDescList.Count; i++)
                         {
-                            var jobDesc = jobList[i];
+                            var jobDesc = JobDescList[i];
 
                             jw.WritePropertyName(jobDesc.JobInterface.FullName);
                             using (jw.WriteStartObjectAuto())
@@ -575,8 +576,9 @@ namespace Unity.ZeroPlayer
             System.Console.WriteLine("Logging to " + outPath);
             System.IO.File.WriteAllText(outPath, build.ToString());
         }
+
 #endif
-        
+
         internal static void EmitLoadConstant(ref ILProcessor il, int val)
         {
             if (val >= -128 && val < 128)
@@ -662,16 +664,10 @@ namespace Unity.ZeroPlayer
 
             return instance;
         }
-        
+
         internal static FieldReference MakeGenericFieldSpecialization(FieldReference self, params TypeReference[] arguments)
         {
-            if (self.DeclaringType.GenericParameters.Count != arguments.Length)
-                throw new ArgumentException();
-
-            var instance = new GenericInstanceType(self.DeclaringType);
-            foreach (var argument in arguments)
-                instance.GenericArguments.Add(argument);
-
+            var instance = MakeGenericTypeSpecialization(self.DeclaringType, arguments);
             return new FieldReference(self.Name, self.FieldType, instance);
         }
 
@@ -679,7 +675,7 @@ namespace Unity.ZeroPlayer
         bool m_BurstEnabled;
         string m_OutputDir;
         InterfaceGen m_interfaceGen;
-        
+
         AssemblyDefinition m_MscorlibAssembly;
         AssemblyDefinition m_EntityAssembly;
         List<AssemblyDefinition> m_AssemblyDefs;

@@ -78,5 +78,10 @@ namespace Unity.Collections.LowLevel.Unsafe
         {
             return true;
         }
+
+        public static bool IsValidNativeContainerElementType<T>()
+        {
+            return true;
+        }
     }
 }

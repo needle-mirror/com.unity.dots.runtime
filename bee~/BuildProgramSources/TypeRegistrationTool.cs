@@ -25,7 +25,7 @@ static class TypeRegistrationTool
             References =
             {
                 ReferenceAssemblies471.Paths,
-                StevedoreUnityCecil.Paths,
+                MonoCecil.Paths,
                 Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"),
             },
             LanguageVersion = "7.3",
@@ -55,7 +55,7 @@ static class TypeRegistrationTool
         {
             ReferenceAssemblies471.Paths,
             EntityBuildUtils,
-            StevedoreUnityCecil.Paths,
+            MonoCecil.Paths,
             StevedoreNewtonsoftJson.Paths,
             Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"),
         },

@@ -3,43 +3,47 @@ using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
-using Unity.Build.Internals;
 using Unity.Serialization.Json;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(Name = "Generate Bee Files", Description = "Generating Bee Files", Category = "DOTS")]
-    sealed class BuildStepGenerateBeeFiles : BuildStep
+    [BuildStep(Description = "Generating Bee Files")]
+    sealed class BuildStepGenerateBeeFiles : BuildStepBase
     {
         public static readonly int BuildSettingsFileVersion = 1;
-        public override Type[] RequiredComponents => new[]
+
+        public override Type[] UsedComponents { get; } =
         {
             typeof(DotsRuntimeBuildProfile),
-            typeof(DotsRuntimeRootAssembly)
-        };
-
-        public override Type[] OptionalComponents => new[]
-        {
+            typeof(DotsRuntimeRootAssembly),
             typeof(OutputBuildDirectory),
             typeof(IDotsRuntimeBuildModifier)
         };
 
-        public override BuildStepResult RunBuildStep(BuildContext context)
+        public override BuildResult Run(BuildContext context)
         {
+            // BuildConfiguration names are used as part of a generated Bee target name. As such, error if the user's
+            // asset contains a space as this will be seen by bee as multiple target names erroneously
+            if (context.BuildConfigurationName.Contains(' '))
+                throw new ArgumentException($"The DOTS Runtime Build Profile does not support BuildConfiguration assets with spaces in the name. Please rename asset '{context.BuildConfigurationName}'");
+
             var manifest = context.BuildManifest;
-            var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
-            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
+            var profile = context.GetComponentOrDefault<DotsRuntimeBuildProfile>();
+            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
             var outputDir = DotsRuntimeRootAssembly.BeeRootDirectory;
 
             BuildProgramDataFileWriter.WriteAll(outputDir.FullName);
 
             var jsonObject = new JsonObject();
-            var config = BuildContextInternals.GetBuildConfiguration(context);
-            var targetName = rootAssembly.MakeBeeTargetName(config);
+            var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
 
             jsonObject["Version"] = BuildSettingsFileVersion;
             jsonObject["PlatformTargetIdentifier"] = profile.Target.BeeTargetName;
+#if UNITY_2020_1_OR_NEWER
+            jsonObject["RootAssembly"] = rootAssembly.RootAssembly.asset.name;
+#else
             jsonObject["RootAssembly"] = rootAssembly.RootAssembly.name;
+#endif
 
             // Managed debugging is disabled by default. It can be enabled
             // using the IL2CPPSettings object, which implements IDotsRuntimeBuildModifier.
@@ -54,10 +58,10 @@ namespace Unity.Entities.Runtime.Build
             jsonObject["EnableSafetyChecks"] = BuildSettingToggle.UseBuildConfiguration.ToString();
             jsonObject["EnableProfiler"] = BuildSettingToggle.UseBuildConfiguration.ToString();
 
-            jsonObject["FinalOutputDirectory"] = GetFinalOutputDirectory(context, targetName, this);
+            jsonObject["FinalOutputDirectory"] = GetFinalOutputDirectory(context, targetName);
             jsonObject["DotsConfig"] = profile.Configuration.ToString();
 
-            foreach (var component in config.GetComponents<IDotsRuntimeBuildModifier>())
+            foreach (var component in context.GetComponents<IDotsRuntimeBuildModifier>())
             {
                 component.Modify(jsonObject);
             }
@@ -75,14 +79,14 @@ namespace Unity.Entities.Runtime.Build
 
             profile.Target.WriteBeeConfigFile(DotsRuntimeRootAssembly.BeeRootDirectory.ToString());
 
-            return Success();
+            return context.Success();
         }
 
-        public static string GetFinalOutputDirectory(BuildContext context, string beeTargetName, BuildStep step = null)
+        public static string GetFinalOutputDirectory(BuildContext context, string beeTargetName)
         {
-            if (step != null && step.HasOptionalComponent<OutputBuildDirectory>(context))
+            if (context.TryGetComponent<OutputBuildDirectory>(out var value))
             {
-                return step.GetOptionalComponent<OutputBuildDirectory>(context).OutputDirectory;
+                return value.OutputDirectory;
             }
             return $"Builds/{beeTargetName}";
         }

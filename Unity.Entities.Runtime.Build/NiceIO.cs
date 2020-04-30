@@ -52,7 +52,7 @@ namespace Unity.Entities.Runtime.Build
                 throw new ArgumentNullException();
             _path = MakeCompletelyWellFormatted(fileSystemInfo.ToString());
         }
-        
+
         //keep this private, we need to guarantee all NPath's out there are guaranteed well formed.
         private NPath(string path, bool guaranteed_well_formed)
         {

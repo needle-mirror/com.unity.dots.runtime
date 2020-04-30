@@ -2,30 +2,24 @@ using System;
 using System.IO;
 using Unity.Build;
 using Unity.Build.Common;
-using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(Name = "Run Bee", Description = "Running Bee", Category = "DOTS")]
-    sealed class BuildStepRunBee : BuildStep
+    [BuildStep(Description = "Running Bee")]
+    sealed class BuildStepRunBee : BuildStepBase
     {
-        public override Type[] RequiredComponents => new[]
+        public override Type[] UsedComponents { get; } =
         {
             typeof(DotsRuntimeBuildProfile),
-            typeof(DotsRuntimeRootAssembly)
-        };
-
-        public override Type[] OptionalComponents => new[]
-        {
+            typeof(DotsRuntimeRootAssembly),
             typeof(OutputBuildDirectory)
         };
 
-        public override BuildStepResult RunBuildStep(BuildContext context)
+        public override BuildResult Run(BuildContext context)
         {
-            var config = BuildContextInternals.GetBuildConfiguration(context);
-            var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
-            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
-            var targetName = rootAssembly.MakeBeeTargetName(config);
+            var profile = context.GetComponentOrDefault<DotsRuntimeBuildProfile>();
+            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
+            var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
             var workingDir = DotsRuntimeRootAssembly.BeeRootDirectory;
             var outputDir = new DirectoryInfo(BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName));
 
@@ -35,7 +29,7 @@ namespace Unity.Entities.Runtime.Build
 
             if (result.Failed)
             {
-                return Failure(result.Error);
+                return context.Failure(result.Error);
             }
 
             if (!string.IsNullOrEmpty(rootAssembly.ProjectName))
@@ -44,7 +38,7 @@ namespace Unity.Entities.Runtime.Build
                 context.SetValue(new DotsRuntimeBuildArtifact { OutputTargetFile = outputTargetFile });
             }
 
-            return Success();
+            return context.Success();
         }
 
         string ShellScriptExtension()

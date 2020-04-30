@@ -6,29 +6,28 @@ using Unity.Build.Common;
 using Unity.Build.Internals;
 using Unity.Scenes;
 using Unity.Scenes.Editor;
-using UnityEditor;
 using UnityEngine.SceneManagement;
 
 namespace Unity.Entities.Runtime.Build
 {
-    [BuildStep(Name = "Export Entities", Description = "Exporting Entities", Category = "DOTS")]
-    sealed class BuildStepExportEntities : BuildStep
+    [BuildStep(Description = "Exporting Entities")]
+    sealed class BuildStepExportEntities : BuildStepBase
     {
         public BlobAssetStore m_BlobAssetStore;
 
-        public override Type[] RequiredComponents => new[]
+        public override Type[] UsedComponents { get; } =
         {
             typeof(DotsRuntimeBuildProfile),
             typeof(DotsRuntimeRootAssembly),
             typeof(SceneList)
         };
 
-        public override BuildStepResult RunBuildStep(BuildContext context)
+        public override BuildResult Run(BuildContext context)
         {
             var manifest = context.BuildManifest;
-            var profile = GetRequiredComponent<DotsRuntimeBuildProfile>(context);
-            var rootAssembly = GetRequiredComponent<DotsRuntimeRootAssembly>(context);
-            var buildScenes = GetRequiredComponent<SceneList>(context);
+            var profile = context.GetComponentOrDefault<DotsRuntimeBuildProfile>();
+            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
+            var buildScenes = context.GetComponentOrDefault<SceneList>();
 
             var exportedSceneGuids = new HashSet<Guid>();
 
@@ -40,16 +39,16 @@ namespace Unity.Entities.Runtime.Build
 
             void ExportSceneToFile(Scene scene, Guid guid)
             {
-                var config = BuildContextInternals.GetBuildConfiguration(context);
-                var targetName = rootAssembly.MakeBeeTargetName(config);
+                var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
                 var dataDirectory = rootAssembly.StagingDirectory.Combine(targetName).Combine("Data");
                 var outputFile = dataDirectory.GetFile(guid.ToString("N"));
                 using (var exportWorld = new World("Export World"))
                 {
+                    var config = BuildContextInternals.GetBuildConfiguration(context);
 #if USE_INCREMENTAL_CONVERSION
-                    var exportDriver = new TinyExportDriver(context, dataDirectory, exportWorld, m_BlobAssetStore);
+                    var exportDriver = new TinyExportDriver(config, dataDirectory, exportWorld, m_BlobAssetStore);
 #else
-                    var exportDriver = new TinyExportDriver(context, profile.DataDirectory);
+                    var exportDriver = new TinyExportDriver(config, dataDirectory);
 #endif
                     exportDriver.DestinationWorld = exportWorld;
                     exportDriver.SceneGUID = new Hash128(guid.ToString("N"));
@@ -101,7 +100,7 @@ namespace Unity.Entities.Runtime.Build
             m_BlobAssetStore.Dispose();
 #endif
 
-            return Success();
+            return context.Success();
         }
     }
 }

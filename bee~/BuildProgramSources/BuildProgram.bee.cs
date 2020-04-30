@@ -130,6 +130,7 @@ public class BuildProgram
             Unsafe = true
         };
         UnityLowLevel.NativeProgram.Libraries.Add(IsLinux, new SystemLibrary("dl"));
+        UnityLowLevel.NativeProgram.Libraries.Add(c => c.Platform is AndroidPlatform, new SystemLibrary("log"));
 
         UnityTinyBurst = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.Tiny.Burst")
         {
@@ -320,6 +321,23 @@ public class BuildProgram
         Backend.Current.AddAliasDependency("tests", deployed.Path);
     }
     
+    //waiting for the burst release with BurstCompilerForLinux in Burst.bee.cs
+    public class BurstCompilerForLinuxWaitingForBurstRelease : BurstCompiler
+    {
+        public override string TargetPlatform { get; set; } = "Linux";
+    
+        //--target=VALUE         Target CPU <Auto|X86_SSE2|X86_SSE4|X64_SSE2|X64_
+        //    SSE4|AVX|AVX2|AVX512|WASM32|ARMV7A_NEON32|ARMV8A_
+        //    AARCH64|THUMB2_NEON32> Default: Auto
+        public override string TargetArchitecture { get; set; } = "X64_SSE2";
+        public override string ObjectFormat { get; set; } = "Elf";
+        public override string FloatPrecision { get; set; } = "High";
+        public override bool SafetyChecks { get; set; } = true;
+        public override bool DisableVectors { get; set; } = false;
+        public override bool Link { get; set; } = false;
+        public override string ObjectFileExtension { get; set; } = ".o";
+        public override bool UseOwnToolchain { get; set; } = true;
+    }
     private static DotsRuntimeCSharpProgram SetupGame(AsmDefDescription game)
     {
         var gameProgram = GetOrMakeDotsRuntimeCSharpProgramFor(game);
@@ -398,6 +416,18 @@ public class BuildProgram
                     burstCompiler.EnableStaticLinkage = true;
                     burstCompiler.ObjectFileExtension = "a";
                 }
+                else if (config.Platform is LinuxPlatform)
+                {
+                    burstCompiler = new BurstCompilerForLinuxWaitingForBurstRelease();
+                }
+                else if (config.Platform is AndroidPlatform)
+                {
+                    burstCompiler = new BurstCompilerForAndroid();
+                    burstCompiler.EnableStaticLinkage = false;
+                    burstCompiler.Link = false;
+                    burstCompiler.EnableDirectExternalLinking = true;
+                }
+
 
                 // Only generate marshaling info for platforms that require marshalling (e.g. Windows DotNet) 
                 // but also if collection checks are enabled (as that is why we need marshalling)
@@ -415,39 +445,41 @@ public class BuildProgram
                 var burstLibName = "lib_burst_generated";
                 var burstDynamicLib = new NativeProgram(burstLibName);
                 DotNetAssembly burstedGame = setupGame;
-                if (!isWebGL)
-                { 
-                    var burstlib = BurstCompiler.SetupBurstCompilationForAssemblies(
-                        burstCompiler,
-                        setupGame,
-                        new NPath(outputDir).Combine("bclobj"),
-                        outputDir,
-                        burstLibName,
-                        out burstedGame);
-                    if (config.Platform is IosPlatform)
-                    {
-                        il2CppOutputProgram.Libraries.Add(c=>c.Equals(config.NativeProgramConfiguration), burstlib);
-                    }
-                    else
-                    {
-                        burstDynamicLib.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
-                        burstDynamicLib.Libraries.Add(
-                            c => c.Equals(config.NativeProgramConfiguration),
-                            gameProgram.TransitiveReferencesFor(config)
-                                .Where(
-                                    p => p is DotsRuntimeCSharpProgram &&
-                                         ((DotsRuntimeCSharpProgram) p).NativeProgram != null)
-                                .Select(
-                                    p => new NativeProgramAsLibrary(((DotsRuntimeCSharpProgram) p).NativeProgram)
-                                        {BuildMode = NativeProgramLibraryBuildMode.Dynamic}));
-                        DotsRuntimeCSharpProgram.SetupDotsRuntimeNativeProgram(burstLibName, burstDynamicLib);
 
-                        var builtBurstLib = burstDynamicLib.SetupSpecificConfiguration(
-                            config.NativeProgramConfiguration,
-                            config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat);
-                        burstedGame = burstedGame.WithDeployables(builtBurstLib);
-                    }
+                var burstlib = BurstCompiler.SetupBurstCompilationForAssemblies(
+                    burstCompiler,
+                    setupGame,
+                    new NPath(outputDir).Combine("bclobj"),
+                    outputDir,
+                    burstLibName,
+                    out burstedGame);
+                if (config.Platform is IosPlatform || config.Platform is AndroidPlatform)
+                {
+                    il2CppOutputProgram.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
+                    il2CppOutputProgram.Defines.Add(
+                        c => c.Equals(config.NativeProgramConfiguration),
+                        $"FORCE_PINVOKE_{burstLibName}_INTERNAL");
                 }
+                else
+                {
+                    burstDynamicLib.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
+                    burstDynamicLib.Libraries.Add(
+                        c => c.Equals(config.NativeProgramConfiguration),
+                        gameProgram.TransitiveReferencesFor(config)
+                            .Where(
+                                p => p is DotsRuntimeCSharpProgram &&
+                                     ((DotsRuntimeCSharpProgram) p).NativeProgram != null)
+                            .Select(
+                                p => new NativeProgramAsLibrary(((DotsRuntimeCSharpProgram) p).NativeProgram)
+                                    {BuildMode = NativeProgramLibraryBuildMode.Dynamic}));
+                    DotsRuntimeCSharpProgram.SetupDotsRuntimeNativeProgram(burstLibName, burstDynamicLib);
+
+                    var builtBurstLib = burstDynamicLib.SetupSpecificConfiguration(
+                        config.NativeProgramConfiguration,
+                        config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat);
+                    burstedGame = burstedGame.WithDeployables(builtBurstLib);
+                }
+
                 configToSetupGameBursted[config] = burstedGame;
             }
             else
@@ -494,8 +526,11 @@ public class BuildProgram
 
                 if (builtNativeProgram is IPackagedAppExtension)
                 {
-                    (builtNativeProgram as IPackagedAppExtension).SetAppPackagingParameters(gameProgram.AsmDefDescription.Name, config.NativeProgramConfiguration.CodeGen, gameProgram.SupportFiles.For(config).Concat(
-                        il2CppOutputProgram.SupportFiles.For(config.NativeProgramConfiguration)));
+                    (builtNativeProgram as IPackagedAppExtension).SetAppPackagingParameters(
+                        gameProgram.AsmDefDescription.Name,
+                        config.DotsConfiguration,
+                        gameProgram.SupportFiles.For(config).Concat(il2CppOutputProgram.SupportFiles.For(config.NativeProgramConfiguration))
+                        );
                 }
                 deployedGame = builtNativeProgram.DeployTo(deployPath);
                 entryPointExecutable = deployedGame.Path;

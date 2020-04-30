@@ -1,11 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Unity.Entities.Runtime.Hashing;
 using Unity.Build;
-using Unity.Build.Internals;
+using Unity.Entities.Runtime.Hashing;
 using UnityEditor;
 using Object = UnityEngine.Object;
 
@@ -25,17 +24,21 @@ namespace Unity.Entities.Runtime.Build
         readonly Dictionary<Object, Item> m_Items = new Dictionary<Object, Item>();
 
 #if USE_INCREMENTAL_CONVERSION
-        public TinyExportDriver(BuildContext context, DirectoryInfo exportDataRoot, World destinationWorld, BlobAssetStore blobAssetStore) : base(destinationWorld, GameObjectConversionUtility.ConversionFlags.AddEntityGUID, blobAssetStore)
+        public TinyExportDriver(BuildConfiguration config, DirectoryInfo exportDataRoot, World destinationWorld, BlobAssetStore blobAssetStore) : base(destinationWorld, GameObjectConversionUtility.ConversionFlags.AddEntityGUID, blobAssetStore)
         {
-            BuildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
+            BuildConfiguration = config;
             m_ExportDataRoot = exportDataRoot;
+            FilterFlags = WorldSystemFilterFlags.DotsRuntimeGameObjectConversion;
         }
+
 #else
-        public TinyExportDriver(BuildContext context, DirectoryInfo exportDataRoot)
+        public TinyExportDriver(BuildConfiguration config, DirectoryInfo exportDataRoot)
         {
-            BuildSettings = BuildContextInternals.GetBuildSettings(context);
+            BuildConfiguration = config;
             m_ExportDataRoot = exportDataRoot;
+            FilterFlags = WorldSystemFilterFlags.DotsRuntimeGameObjectConversion;
         }
+
 #endif
 
         public override Guid GetGuidForAssetExport(Object asset)

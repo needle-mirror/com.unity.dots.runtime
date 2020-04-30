@@ -26,6 +26,7 @@ namespace Unity.Collections.LowLevel.Unsafe
     public class NativeDisableUnsafePtrRestrictionAttribute : Attribute {}
     public sealed class NativeContainerSupportsMinMaxWriteRestriction : Attribute {}
     public class NativeContainerSupportsDeallocateOnJobCompletionAttribute : Attribute {}
+    public class NativeContainerSupportsDeferredConvertListToArray : Attribute {}
     public class NativeSetClassTypeToNullOnSchedule : Attribute {}
     public class NativeContainerIsReadOnly : Attribute {}
     public sealed class NativeDisableContainerSafetyRestrictionAttribute : Attribute {}

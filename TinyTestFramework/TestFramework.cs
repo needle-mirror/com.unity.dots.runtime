@@ -1,9 +1,27 @@
 using System;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace NUnit.Framework
 {
+    public class AssertionException : Exception
+    {
+        public AssertionException(string _ = null) {}
+    }
+
     public class TestAttribute : Attribute
     {
+        public TestAttribute() {}
+
+        public virtual string Description
+        {
+            get => "";
+            set {}
+        }
+    }
+
+    public class ExplicitAttribute : Attribute
+    {
+        public ExplicitAttribute(string msg) {}
     }
 
     public class TestFixtureAttribute : Attribute
@@ -13,55 +31,53 @@ namespace NUnit.Framework
     public class SetUpAttribute : Attribute
     {
     }
-    
+
     public class TearDownAttribute : Attribute
     {
     }
-    
+
     public class IgnoreAttribute : Attribute
     {
         public IgnoreAttribute(string msg)
         {
-            
         }
     }
 
-
-    public static class Assert
+    public class ValuesAttribute : Attribute
     {
-        public static void IsTrue(bool value)
+        public ValuesAttribute(params int[] list)
         {
-            
         }
 
-        public static void AreEqual(object p0, object ceilpow2)
+        public ValuesAttribute(params bool[] list)
         {
-            throw new NotImplementedException();
         }
 
-        public static void Fail(string msg)
-        {
-            
-        }
+        // bool true/false
+        public ValuesAttribute() {}
+    }
 
-        public static T Throws<T>(Action action) where T : Exception
+    public class RepeatAttribute : Attribute
+    {
+        public RepeatAttribute(int n)
         {
-            throw new NotImplementedException();
-        }
 
-        public static void IsFalse(bool hasComponent)
-        {
-            throw new NotImplementedException();
         }
+    }
 
-        public static void AreNotEqual(object i, object value)
-        {
-            throw new NotImplementedException();
-        }
+    public class RangeAttribute : Attribute
+    {
+        public RangeAttribute(int a, int b) {}
+    }
 
-        public static void That(bool b)
+
+    public delegate void TestDelegate();
+
+    public static class UnitTestRunner
+    {
+        public static void Run()
         {
-            throw new NotImplementedException();
+            throw new Exception("Should be replaced by code-gen.");
         }
     }
 }

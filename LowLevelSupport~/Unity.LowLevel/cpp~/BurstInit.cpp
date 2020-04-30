@@ -18,7 +18,10 @@
 
 #include <dlfcn.h>
 #endif
-
+#if UNITY_ANDROID
+#include <android/log.h>
+#define printf(...) __android_log_print(ANDROID_LOG_INFO, "AndroidWrapper", __VA_ARGS__);
+#endif
 using std::string;
 using std::map;
 
@@ -27,7 +30,7 @@ void* loadLibrary(const char* libname)
 {
     #if UNITY_WINDOWS
     return (void*)LoadLibraryA(libname);
-    #else
+    #elif UNITY_MACOSX
     const char* name = (string(libname) + ".dylib").c_str();
     void* ret = (void*)dlopen(name, RTLD_NOW);
     if (ret == NULL)
@@ -36,6 +39,10 @@ void* loadLibrary(const char* libname)
         ret = (void*)dlopen(name2, RTLD_NOW);
     }
         
+    return ret;
+    #else
+    const char* name = (string(libname) + ".so").c_str();
+    void* ret = (void*)dlopen(name, RTLD_NOW);
     return ret;
     #endif
 }
@@ -151,6 +158,20 @@ void BurstInit_iOS()
 #endif
 }
 
+void BurstInit_Android()
+{
+#if UNITY_ANDROID
+    auto burstInit = (BurstInitializeDelegate)loadFn(RTLD_DEFAULT, "burst.initialize");
+    if (burstInit != NULL)
+        burstInit(NativeGetExternalFunctionPointerCallback);
+    else
+    {
+        printf("ERROR: Couldn't find method burst.initialize\n");
+    	std::terminate();
+    }
+#endif
+}
+
 void BurstInit_Desktop()
 {
     functionNameToPointer["burst_abort"] = (void*)burst_abort;
@@ -158,11 +179,9 @@ void BurstInit_Desktop()
 
     if (library == NULL)
     {
-#if DEBUG
         printf("ERROR: failed to load lib_burst_generated shared library.\n");
-        fflush(stdout);
-#endif //DEBUG
-        return;
+		fflush(stdout);
+		std::terminate();
     }
 
     auto burstInit = (BurstInitializeDelegate)loadFn(library, "burst.initialize");
@@ -171,25 +190,25 @@ void BurstInit_Desktop()
         burstInit(NativeGetExternalFunctionPointerCallback);
     else
     {
-#if DEBUG
         printf("ERROR: Couldn't find method burst.initialize in lib_burst_generated.dll\n");
         fflush(stdout);
-#endif //DEBUG
+		std::terminate();
     }
-    
 }
 
 
 
 extern "C" DLLEXPORT void BurstInit()
 {
-#if UNITY_WEBGL || UNITY_ANDROID
+#if !ENABLE_UNITY_BURST
 	//burst is disabled on webgl & android
     return;
 #elif UNITY_IOS
     BurstInit_iOS();
+#elif UNITY_ANDROID
+    BurstInit_Android();
 #else 
     BurstInit_Desktop();
-#endif //UNITY_IOS
+#endif
 }
 

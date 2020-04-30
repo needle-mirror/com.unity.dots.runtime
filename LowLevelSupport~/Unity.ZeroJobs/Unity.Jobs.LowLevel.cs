@@ -509,41 +509,48 @@ namespace Unity.Jobs.LowLevel.Unsafe
             {
                 parameters.Dependency.Complete();
                 UnsafeUtility.SetInJob(1);
+                try
+                {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
 
-                // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
-                // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
-                if (jobReflectionData.UnmanagedSize != -1)
-                {
-                    void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
+                    // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
+                    // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+                    if (jobReflectionData.UnmanagedSize != -1)
+                    {
+                        void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
 
-                    void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData);
-                    void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData);
-                    UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+                        void* dst = (byte*) unmanagedJobData + sizeof(JobMetaData);
+                        void* src = (byte*) managedJobDataPtr + sizeof(JobMetaData);
+                        UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
-                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
 
-                    // In the single threaded case, this is synchronous execution.
-                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
-                    UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
-                }
-                else
+                        // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
+                        UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
+                    }
+                    else
 #endif
-                {
-                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+                    {
+                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
 
-                    // In the single threaded case, this is synchronous execution.
-                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
-                    UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
-                }
+                        // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
+                        UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
+                    }
 
 #if UNITY_SINGLETHREADED_JOBS
 
-                // This checks that the generated code was actually called; the last responsibility of
-                // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-                Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+                    // This checks that the generated code was actually called; the last responsibility of
+                    // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                    Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
 #endif
-                UnsafeUtility.SetInJob(0);
+                }
+                finally
+                {
+                    UnsafeUtility.SetInJob(0);
+                }
+
                 return jobHandle;
             }
 #if !UNITY_SINGLETHREADED_JOBS
@@ -624,47 +631,53 @@ namespace Unity.Jobs.LowLevel.Unsafe
             {
                 parameters.Dependency.Complete();
                 UnsafeUtility.SetInJob(1);
+                try
+                {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS && !UNITY_DOTSPLAYER_IL2CPP
 
-                // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
-                // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
-                if (jobReflectionData.UnmanagedSize != -1)
-                {
-                    void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
+                    // If the job was bursted, and the job structure contained non-blittable fields, the UnmanagedSize will
+                    // be something other than -1 meaning we need to marshal the managed representation before calling the ExecuteFn
+                    if (jobReflectionData.UnmanagedSize != -1)
+                    {
+                        void* unmanagedJobData = AllocateJobHeapMemory(jobReflectionData.UnmanagedSize, 1);
 
-                    void* dst = (byte*)unmanagedJobData + sizeof(JobMetaData);
-                    void* src = (byte*)managedJobDataPtr + sizeof(JobMetaData);
-                    UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+                        void* dst = (byte*) unmanagedJobData + sizeof(JobMetaData);
+                        void* src = (byte*) managedJobDataPtr + sizeof(JobMetaData);
+                        UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
-                    // In the single threaded case, this is synchronous execution.
-                    // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
-                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
-                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
-
-#if UNITY_SINGLETHREADED_JOBS
-
-                    // This checks that the generated code was actually called; the last responsibility of
-                    // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-                    Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
-#endif
-                }
-                else
-#endif
-                {
-                    CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
-
-                    // In the single threaded case, this is synchronous execution.
-                    UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
+                        // In the single threaded case, this is synchronous execution.
+                        // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
+                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, 0);
 
 #if UNITY_SINGLETHREADED_JOBS
 
-                    // This checks that the generated code was actually called; the last responsibility of
-                    // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
-                    Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+                        // This checks that the generated code was actually called; the last responsibility of
+                        // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                        Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
 #endif
+                    }
+                    else
+#endif
+                    {
+                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
+
+                        // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, 0);
+
+#if UNITY_SINGLETHREADED_JOBS
+
+                        // This checks that the generated code was actually called; the last responsibility of
+                        // the generated code is to clean up the memory. Unfortunately only works in single threaded mode,
+                        Assert.IsTrue(UnsafeUtility.GetLastFreePtr() == managedJobDataPtr);
+#endif
+                    }
+                }
+                finally
+                {
+                    UnsafeUtility.SetInJob(0);
                 }
 
-                UnsafeUtility.SetInJob(0);
                 return jobHandle;
             }
 #if !UNITY_SINGLETHREADED_JOBS

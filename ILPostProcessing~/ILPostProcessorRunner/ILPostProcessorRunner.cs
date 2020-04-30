@@ -185,13 +185,13 @@ public class ILPostProcessorRunner
         }
     }
 
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
         using (new Marker("ILPostProcessorRunner Time"))
         {
 
             if (!ProcessArgs(args))
-                return;
+                return -1;
 
             var sortedILPostProcessors = SortILPostProcessors();
             RunILPostProcessors(sortedILPostProcessors);
@@ -199,6 +199,7 @@ public class ILPostProcessorRunner
             // Write out our Input Assembly, processed or not (in which case it's just a copy)
             InputAssembly.Save();
         }
+        return 0;
     }
 
 

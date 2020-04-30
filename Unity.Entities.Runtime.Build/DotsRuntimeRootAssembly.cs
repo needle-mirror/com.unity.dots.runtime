@@ -20,9 +20,21 @@ namespace Unity.Entities.Runtime.Build
         /// assembly determines what other assemblies will be pulled in for the build.
         /// </summary>
         [CreateProperty]
+#if UNITY_2020_1_OR_NEWER
+        public LazyLoadReference<AssemblyDefinitionAsset> RootAssembly
+        {
+            get => m_RootAssembly;
+            set
+            {
+                m_RootAssembly = value;
+                TypeCache.BaseAssemblies = new[] { m_RootAssembly.asset };
+            }
+        }
+        LazyLoadReference<AssemblyDefinitionAsset> m_RootAssembly;
+#else
         public AssemblyDefinitionAsset RootAssembly
         {
-            get { return m_RootAssembly; }
+            get => m_RootAssembly;
             set
             {
                 m_RootAssembly = value;
@@ -30,21 +42,27 @@ namespace Unity.Entities.Runtime.Build
             }
         }
         AssemblyDefinitionAsset m_RootAssembly;
+#endif
 
         public string ProjectName
         {
             get
             {
-                if (RootAssembly == null || !RootAssembly)
+#if UNITY_2020_1_OR_NEWER
+                var rootAssembly = RootAssembly.asset;
+#else
+                var rootAssembly = RootAssembly;
+#endif
+                if (rootAssembly == null || !rootAssembly)
                     return null;
 
                 // FIXME should maybe be RootAssembly.name, but this is super confusing
-                var asmdefPath = AssetDatabase.GetAssetPath(RootAssembly);
+                var asmdefPath = AssetDatabase.GetAssetPath(rootAssembly);
                 var asmdefFilename = Path.GetFileNameWithoutExtension(asmdefPath);
 
                 // just require that they're identical for this root assembly
-                if (!asmdefFilename.Equals(RootAssembly.name))
-                    throw new InvalidOperationException($"Root asmdef {asmdefPath} must have its assembly name (currently '{RootAssembly.name}') set to the same as the filename (currently '{asmdefFilename}')");
+                if (!asmdefFilename.Equals(rootAssembly.name))
+                    throw new InvalidOperationException($"Root asmdef {asmdefPath} must have its assembly name (currently '{rootAssembly.name}') set to the same as the filename (currently '{asmdefFilename}')");
 
                 return asmdefFilename;
             }
@@ -56,9 +74,14 @@ namespace Unity.Entities.Runtime.Build
         [CreateProperty, HideInInspector]
         public string BeeTargetOverride { get; set; }
 
-        public string MakeBeeTargetName(BuildConfiguration buildConfig)
+        public string MakeBeeTargetName(string buildConfigurationName)
         {
-            return $"{RootAssembly.name}-{buildConfig.name}".ToLower();
+#if UNITY_2020_1_OR_NEWER
+            var rootAssembly = RootAssembly.asset;
+#else
+            var rootAssembly = RootAssembly;
+#endif
+            return $"{rootAssembly.name}-{buildConfigurationName}".ToLower();
         }
     }
 }

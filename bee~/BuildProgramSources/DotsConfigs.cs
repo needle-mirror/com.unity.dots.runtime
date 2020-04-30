@@ -46,13 +46,11 @@ public static class DotsConfigs
 
                     var targetShouldUseBurst = settingsObject.GetBool("EnableBurst");
 
-                    // Temporary until we support webgl player connection
-                    bool isWebGl = target.ToolChain.Platform is WebGLPlatform;
-
-                    var enableProfiler = !isWebGl && ShouldEnableDevelopmentOptionForSetting("EnableProfiler", true, settingsObject);
+                    var enableProfiler = ShouldEnableDevelopmentOptionForSetting("EnableProfiler", new [] {DotsConfiguration.Develop}, settingsObject);
 
                     var dotsCfg = DotsConfigForSettings(settingsObject, out var codegen);
-                    var enableUnityCollectionsChecks = ShouldEnableDevelopmentOptionForSetting("EnableSafetyChecks", true, settingsObject);
+                    var enableUnityCollectionsChecks = ShouldEnableDevelopmentOptionForSetting("EnableSafetyChecks",
+                        new[] {DotsConfiguration.Debug, DotsConfiguration.Develop}, settingsObject);
 
                     if (!target.CanUseBurst && targetShouldUseBurst)
                     {
@@ -61,7 +59,8 @@ public static class DotsConfigs
                         targetShouldUseBurst = false;
                     }
 
-                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging", false, settingsObject);
+                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging",
+                        new[] {DotsConfiguration.Debug}, settingsObject);
 
                     if (target.Identifier == "asmjs" || target.Identifier == "wasm")
                         mdb = false;
@@ -72,7 +71,7 @@ public static class DotsConfigs
                     if (settingsObject.Content.TryGetValue("FinalOutputDirectory", out var finalOutputToken))
                         finalOutputDir = finalOutputToken.Value<string>();
 
-                    var multithreading = settingsObject.GetBool("EnableMultiThreading");
+                    var multithreading = settingsObject.GetBool("EnableMultithreading");
                     var defines = new List<string>();
 
                     if (settingsObject.Content.TryGetValue("ScriptingDefines", out var definesJToken))
@@ -133,13 +132,13 @@ public static class DotsConfigs
         return dotsCfg;
     }
 
-    public static bool ShouldEnableDevelopmentOptionForSetting(string optionName, bool defaultDevelopEnabled, FriendlyJObject settingsObject)
+    public static bool ShouldEnableDevelopmentOptionForSetting(string optionName, DotsConfiguration[] enabledByDefaultForConfigurations, FriendlyJObject settingsObject)
     {
         var optionString = settingsObject.GetString(optionName);
         if (string.IsNullOrEmpty(optionString) || optionString == "UseBuildConfiguration")
         {
             var dotsConfig = DotsConfigForSettings(settingsObject, out var unused);
-            return dotsConfig == DotsConfiguration.Debug || (defaultDevelopEnabled && dotsConfig == DotsConfiguration.Develop);
+            return enabledByDefaultForConfigurations.Contains(dotsConfig);
         }
         if (optionString == "Enabled")
             return true;
