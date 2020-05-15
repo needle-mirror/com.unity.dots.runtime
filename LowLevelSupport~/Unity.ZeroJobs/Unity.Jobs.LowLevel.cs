@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Runtime.InteropServices;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.Assertions;
@@ -84,11 +85,19 @@ namespace Unity.Jobs.LowLevel.Unsafe
     public static class JobsUtility
     {
 #if UNITY_SINGLETHREADED_JOBS
-        public static readonly int JobWorkerCount = 0;
+        public const int JobWorkerCount = 0;
         public const int MaxJobThreadCount = 1;
 #else
-        // https://unity3d.atlassian.net/browse/DOTSR-1075
-        public static readonly int JobWorkerCount = 8; // Environment.ProcessorCount;
+        struct JobWorkerCountKey { }
+        static readonly SharedStatic<int> s_JobWorkerCount = SharedStatic<int>.GetOrCreate<JobWorkerCountKey>();
+
+        public static unsafe int JobWorkerCount
+        {
+            get
+            {
+                return s_JobWorkerCount.Data;
+            }
+        }
         public const int MaxJobThreadCount = 128;
 #endif
         public const int CacheLineSize = 64;
@@ -230,33 +239,48 @@ namespace Unity.Jobs.LowLevel.Unsafe
         internal const string nativejobslib = "libnativejobs";
 #endif
 
+        public static void Initialize()
+        {
 #if !UNITY_SINGLETHREADED_JOBS
-        internal static IntPtr JobQueue
+            // We need to push the thread count before the jobs run, because we can't make a lazy
+            // call to Environment.ProcessorCount from Burst.
+            // about the 8 thread restriction: https://unity3d.atlassian.net/browse/DOTSR-1499
+            s_JobWorkerCount.Data = Environment.ProcessorCount < 8 ? Environment.ProcessorCount : 8;
+#endif
+        }
+
+#if !UNITY_SINGLETHREADED_JOBS
+        // Todo: Remove this jank when nativejobs offers the ability to make a job queue without specifying a name
+        static readonly byte[] JobQueueName = new byte[] { 0x6a, 0x6f, 0x62, 0x2d, 0x71, 0x75, 0x65, 0x75, 0x65, 0x00 }; // job-queue, UTF-8
+        static readonly byte[] WorkerThreadName = new byte[] { 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2d, 0x62, 0x65, 0x65, 0x00 }; // worker-bee, UTF-8
+        internal static unsafe IntPtr JobQueue
         {
             get
             {
-                if (s_JobQueue == IntPtr.Zero)
-                    s_JobQueue = CreateJobQueue("job-queue", "worker-bee", JobWorkerCount);
+                if (s_JobQueue.Data == IntPtr.Zero)
+                    s_JobQueue.Data = CreateJobQueue((IntPtr)UnsafeUtility.AddressOf(ref JobQueueName[0]), (IntPtr)UnsafeUtility.AddressOf(ref WorkerThreadName[0]), JobWorkerCount);
 
-                return s_JobQueue;
+                return s_JobQueue.Data;
             }
         }
         internal static IntPtr BatchScheduler
         {
             get
             {
-                if (s_BatchScheduler == IntPtr.Zero)
+                if (s_BatchScheduler.Data == IntPtr.Zero)
                 {
                     Assert.IsTrue(JobQueue != IntPtr.Zero);
-                    s_BatchScheduler = CreateJobBatchScheduler();
+                    s_BatchScheduler.Data = CreateJobBatchScheduler();
                 }
 
-                return s_BatchScheduler;
+                return s_BatchScheduler.Data;
             }
         }
 
-        static IntPtr s_JobQueue;
-        static IntPtr s_BatchScheduler;
+        struct JobQueueSharedStaticKey { }
+        struct BatchScheduldeSharedStaticKey { }
+        static readonly SharedStatic<IntPtr> s_JobQueue = SharedStatic<IntPtr>.GetOrCreate<JobQueueSharedStaticKey>();
+        static readonly SharedStatic<IntPtr> s_BatchScheduler = SharedStatic<IntPtr>.GetOrCreate<BatchScheduldeSharedStaticKey>();
 
         public static JobHandle ScheduleJob(IntPtr jobFuncPtr, IntPtr jobDataPtr, JobHandle dependsOn)
         {
@@ -273,21 +297,21 @@ namespace Unity.Jobs.LowLevel.Unsafe
         // TODO: Need to find a good place to shut down jobs on application quit/exit
         public static void Shutdown()
         {
-            if (s_BatchScheduler != IntPtr.Zero)
+            if (s_BatchScheduler.Data != IntPtr.Zero)
             {
-                DestroyJobBatchScheduler(s_BatchScheduler);
-                s_BatchScheduler = IntPtr.Zero;
+                DestroyJobBatchScheduler(s_BatchScheduler.Data);
+                s_BatchScheduler.Data = IntPtr.Zero;
             }
 
-            if (s_JobQueue != IntPtr.Zero)
+            if (s_JobQueue.Data != IntPtr.Zero)
             {
                 DestroyJobQueue();
-                s_JobQueue = IntPtr.Zero;
+                s_JobQueue.Data = IntPtr.Zero;
             }
         }
 
         [DllImport(nativejobslib)]
-        static extern IntPtr CreateJobQueue(string queueName, string workerName, int numJobWorkerThreads);
+        static extern unsafe IntPtr CreateJobQueue(IntPtr queueName, IntPtr workerName, int numJobWorkerThreads);
 
         [DllImport(nativejobslib)]
         static extern void DestroyJobQueue();

@@ -57,7 +57,7 @@ public static class Il2Cpp
 
     private const string metadataFilePath = "Data/Metadata/global-metadata.dat";
     
-    private static IFileBundle Il2CppDependencies => _il2cppAndDeps.Value.Deps;
+    public static IFileBundle Il2CppDependencies => _il2cppAndDeps.Value.Deps;
     public static IFileBundle Distribution => _il2cppAndDeps.Value.Distribution;
 
     private static DotNetAssembly _tinyCorlib => new DotNetAssembly(Distribution.Path.Combine("build/profiles/Tiny/mscorlib.dll"), Framework.FrameworkNone, referenceAssemblyPath:
@@ -412,6 +412,7 @@ public static class Il2Cpp
             program.Sources.Add(Distribution.GetFileList("libil2cpp/gc"));
             program.Sources.Add(Distribution.GetFileList("libil2cpp/utils"));
             program.Sources.Add(Distribution.GetFileList("libil2cpp/vm-utils"));
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/codegen"));
             program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp"));
             program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp", "pch"));
         }

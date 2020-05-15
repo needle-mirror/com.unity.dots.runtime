@@ -69,7 +69,7 @@ static class ILPostProcessorTool
 
     private static void AddActions(CSharpProgramConfiguration config, DotNetAssembly[] inputAssemblies, NPath targetDirectory, string[] defines)
     {
-        var processors = BuildProgram.ILPostProcessorAssemblies.Select(asm=>asm.Path.MakeAbsolute());
+        var processors = BuildProgram.ILPostProcessorAssemblies.Select(asm => asm.Path.MakeAbsolute());
         var outputDirArg = "--outputDir " + targetDirectory.MakeAbsolute().QuoteForProcessStart();
         var processorPathsArg = processors.Count() > 0 ? "--processors " + processors.Select(p => p.QuoteForProcessStart()).Aggregate((s1, s2) => s1 + "," + s2) : "";
 
@@ -79,33 +79,39 @@ static class ILPostProcessorTool
         {
             var assemblyArg = inputAsm.Path.MakeAbsolute().QuoteForProcessStart();
             var referenceAsmPaths = inputAsm.RuntimeDependencies.Where(a => !a.Path.IsChildOf("post_ilprocessing"))
-                .Select(a => a.Path.MakeAbsolute().QuoteForProcessStart());
+                .Select(a => a.Path.MakeAbsolute());
 
             var dotsConfig = (DotsRuntimeCSharpProgramConfiguration)config;
 
-            if (dotsConfig.TargetFramework == TargetFramework.Tiny)
+            switch (dotsConfig.TargetFramework)
             {
-                referenceAsmPaths = referenceAsmPaths.Concat(
-                    new[]
+                case TargetFramework.Tiny:
                     {
-                        Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll").MakeAbsolute().QuoteForProcessStart(),
-                        Il2Cpp.TinyCorlib.Path.MakeAbsolute().QuoteForProcessStart()
-                    });
-            }
-            else
-            {
-                var framework = inputAsm.Framework;
-                if (!referenceAssemblyProvider.TryFor(framework, false, out var referenceAssemblies, out var reason))
-                    throw new ArgumentException($"No reference assemblies found for {framework} reason: {reason}. provider: {referenceAssemblyProvider.GetType()}");
+                        referenceAsmPaths = referenceAsmPaths.Concat(
+                            new[]
+                            {
+                                Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"),
+                                Il2Cpp.TinyCorlib.Path
+                            });
+                        break;
+                    }
 
-                referenceAsmPaths = referenceAsmPaths.Concat(referenceAssemblies.Select(a => a.MakeAbsolute().QuoteForProcessStart()));
+                case TargetFramework.NetStandard20:
+                    {
+                        NPath bclDir = Il2Cpp.Il2CppDependencies.Path.Combine("MonoBleedingEdge/builds/monodistribution/lib/mono/unityaot");
+                        referenceAsmPaths = referenceAsmPaths.Concat(new[] { bclDir.Combine("mscorlib.dll"), bclDir.Combine("Facades/netstandard.dll") });
+                        break;
+                    }
+
+                default:
+                    throw new NotImplementedException($"Unknown target framework: {dotsConfig.TargetFramework}");
             }
 
-            var referencesArg = referenceAsmPaths.Any() ? "--assemblyReferences " + referenceAsmPaths.Distinct().Aggregate((s1, s2) => s1 + "," + s2) : string.Empty;
+            var referencesArg = referenceAsmPaths.Any() ? "--assemblyReferences " + referenceAsmPaths.Select(r => r.MakeAbsolute().QuoteForProcessStart()).Distinct().Aggregate((s1, s2) => s1 + "," + s2) : string.Empty;
             var allscriptDefines = dotsConfig.Defines.Concat(defines);
             var definesArg = !allscriptDefines.Empty() ? "--scriptingDefines " + allscriptDefines.Distinct().Aggregate((d1, d2) => d1 + "," + d2) : "";
             var targetFiles = TargetPathsFor(targetDirectory, inputAsm).ToArray();
-            var inputFiles = InputPathsFor(inputAsm).Concat(processors).Concat(new[] { _ILPostProcessorRunnableProgram.Value.Path }).ToArray();
+            var inputFiles = InputPathsFor(inputAsm).Concat(processors).Concat(new[] { _ILPostProcessorRunnableProgram.Value.Path }).Concat(referenceAsmPaths).ToArray();
 
             var args = new List<string>
             {
@@ -121,7 +127,7 @@ static class ILPostProcessorTool
                 inputFiles,
                 _ILPostProcessorRunnableProgram.Value.InvocationString,
                 args,
-                allowedOutputSubstrings: new [] { "ILPostProcessorRunner", "[WARN]", "[ERROR]"}
+                allowedOutputSubstrings: new[] { "ILPostProcessorRunner", "[WARN]", "[ERROR]" }
             );
         }
     }

@@ -44,7 +44,14 @@ public static class DotsConfigs
                     if (!target.ToolChain.CanBuild)
                         continue;
 
+                    var multithreading = settingsObject.GetBool("EnableMultithreading");
                     var targetShouldUseBurst = settingsObject.GetBool("EnableBurst");
+                    if (!targetShouldUseBurst && multithreading)
+                    {
+                        Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
+                            $"specified 'EnableBurst=False', but 'Multithreading=True'. Multithreading requires Burst, therefore enabling Burst.");
+                        targetShouldUseBurst = true;
+                    }
 
                     var enableProfiler = ShouldEnableDevelopmentOptionForSetting("EnableProfiler", new [] {DotsConfiguration.Develop}, settingsObject);
 
@@ -71,9 +78,7 @@ public static class DotsConfigs
                     if (settingsObject.Content.TryGetValue("FinalOutputDirectory", out var finalOutputToken))
                         finalOutputDir = finalOutputToken.Value<string>();
 
-                    var multithreading = settingsObject.GetBool("EnableMultithreading");
                     var defines = new List<string>();
-
                     if (settingsObject.Content.TryGetValue("ScriptingDefines", out var definesJToken))
                         defines = ((JArray) definesJToken).Select(token => token.Value<string>()).ToList();
 

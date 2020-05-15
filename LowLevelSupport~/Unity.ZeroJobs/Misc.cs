@@ -53,6 +53,8 @@ namespace Unity.Core
 
         public static void Initialize()
         {
+            JobsUtility.Initialize();
+
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.Initialize();
 #endif

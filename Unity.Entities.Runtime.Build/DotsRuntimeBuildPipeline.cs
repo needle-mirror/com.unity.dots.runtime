@@ -1,5 +1,7 @@
+using System;
 using System.IO;
 using Unity.Build;
+using Unity.Build.Common;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -12,6 +14,18 @@ namespace Unity.Entities.Runtime.Build
             typeof(BuildStepGenerateBeeFiles),
             typeof(BuildStepRunBee)
         };
+
+        protected override CleanResult OnClean(CleanContext context)
+        {
+            var artifacts = context.GetLastBuildArtifact<DotsRuntimeBuildArtifact>();
+            if (artifacts == null)
+                return context.Success();
+
+            var buildDirectory = artifacts.OutputTargetFile.Directory;
+            if (buildDirectory.Exists)
+                buildDirectory.Delete(true);
+            return context.Success();
+        }
 
         protected override BuildResult OnBuild(BuildContext context)
         {
@@ -61,6 +75,12 @@ namespace Unity.Entities.Runtime.Build
 
             //@TODO: BuildTarget.Run should return the process, so we can store it in DotsRuntimeRunInstance
             return context.Success(new DotsRuntimeRunInstance());
+        }
+
+        public override DirectoryInfo GetOutputBuildDirectory(BuildConfiguration config)
+        {
+            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(config);
+            return artifact.OutputTargetFile.Directory;
         }
     }
 }

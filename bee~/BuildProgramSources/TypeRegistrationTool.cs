@@ -68,16 +68,7 @@ static class TypeRegistrationTool
         DotsRuntimeCSharpProgramConfiguration dotsConfig)
     {
         return inputAssembly.ApplyDotNetAssembliesPostProcessor($"artifacts/{inputAssembly.Path.FileNameWithoutExtension}/{dotsConfig.Identifier}/post_typereg/",
-            (inputAssemblies, targetDirectory) => AddActions(dotsConfig, inputAssemblies, targetDirectory),
-            customizeOutput: RemovePdbFromStaticTypeRegistry
-        );
-    }
-
-    private static DotNetAssembly RemovePdbFromStaticTypeRegistry(DotNetAssembly input, DotNetAssembly suggestedOutput)
-    {
-        return input.Path.FileName == "Unity.Entities.StaticTypeRegistry.dll"
-            ? suggestedOutput.WithDebugSymbolPath(null)
-            : suggestedOutput;
+            (inputAssemblies, targetDirectory) => AddActions(dotsConfig, inputAssemblies, targetDirectory));
     }
 
     private static void AddActions(DotsRuntimeCSharpProgramConfiguration dotsConfig, DotNetAssembly[] inputAssemblies, NPath targetDirectory)
@@ -94,9 +85,7 @@ static class TypeRegistrationTool
 
         var inputFiles = inputAssemblies.SelectMany(InputPathsFor)
             .Concat(new[] {_typeRegRunnableProgram.Value.Path}).ToArray();
-        var targetFiles = inputAssemblies.SelectMany(i => TargetPathsFor(targetDirectory, i))
-            .Where(p => p.FileName != "Unity.Entities.StaticTypeRegistry.pdb")
-            .ToArray();
+        var targetFiles = inputAssemblies.SelectMany(i => TargetPathsFor(targetDirectory, i)).ToArray();
 
         Backend.Current.AddAction("TypeRegGen",
             targetFiles,

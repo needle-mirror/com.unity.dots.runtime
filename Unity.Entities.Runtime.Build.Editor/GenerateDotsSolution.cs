@@ -804,8 +804,12 @@ namespace Unity.Entities.Runtime.Build
         sealed class GenerateDotsSolutionBuildPipeline : BuildPipelineBase
         {
             public GenerateDotsSolutionBuildPipeline(IEnumerable<Type> steps) : base(steps.ToArray()) {}
+
+            protected override CleanResult OnClean(CleanContext context) => throw new NotImplementedException();
             protected override BuildResult OnBuild(BuildContext context) => BuildSteps.Run(context);
             protected override RunResult OnRun(RunContext context) => throw new NotImplementedException();
+
+            public override DirectoryInfo GetOutputBuildDirectory(BuildConfiguration config) => throw new NotImplementedException();
         }
     }
 }

@@ -76,7 +76,6 @@ namespace Unity.ZeroPlayer
         readonly MethodDefinition m_SafetyHandle_AllowReadOnlyFnDef;
         readonly MethodDefinition m_SafetyHandle_UnpatchLocalFnDef;
         readonly MethodDefinition m_DisposeSentinel_ClearFnDef;
-        readonly MethodDefinition m_UnsafeUtility_FreeFnDef;
         readonly TypeDefinition m_IntPtrDef;
         readonly MethodDefinition m_IntPtr_CtorFnDef;
         readonly MethodDefinition m_JobsUtility_CountFromDeferredDataFnDef;
@@ -85,8 +84,6 @@ namespace Unity.ZeroPlayer
         readonly TypeDefinition m_JobsUtility_ManagedJobDelegateDef;
         readonly MethodDefinition m_JobsUtility_ManagedJobDelegate_CtorFnDef;
         readonly TypeDefinition m_JobsUtility_ManagedJobForEachDelegateDef;
-
-        bool m_BurstEnabled;
 
         // types that are found that support DeferredConvertListToArray.  It's really only ever going to
         // be NativeArray.
@@ -121,14 +118,12 @@ namespace Unity.ZeroPlayer
         public InterfaceGen(List<AssemblyDefinition> assemblies, bool burstEnabled)
         {
             m_Assemblies = assemblies;
-            m_BurstEnabled = burstEnabled;
             m_SystemAssembly = assemblies.First(asm => asm.Name.Name == "mscorlib");
             m_ZeroJobsAssembly = assemblies.First(asm => asm.Name.Name == "Unity.ZeroJobs");
             m_LowLevelAssembly = assemblies.First(asm => asm.Name.Name == "Unity.LowLevel");
 
             m_UnsafeUtilityDef = m_LowLevelAssembly.MainModule.GetAllTypes().First(i =>
                 i.FullName == "Unity.Collections.LowLevel.Unsafe.UnsafeUtility");
-            m_UnsafeUtility_FreeFnDef = m_UnsafeUtilityDef.Methods.First(n => n.Name == "Free");
 
             m_PinvokeCallbackAttribute = m_ZeroJobsAssembly.MainModule.Types.First(i =>
                 i.FullName == "Unity.Jobs.MonoPInvokeCallbackAttribute");
@@ -1122,45 +1117,19 @@ namespace Unity.ZeroPlayer
                         bool found = false;
                         List<TypeReference> args = new List<TypeReference> { type };
 
-                        if (type.IsStructWithInterface("Unity.Entities.JobForEachExtensions/IBaseJobForEach"))
+                        for (int i = 0; i < type.Interfaces.Count; i++)
                         {
-                            for (int i = 0; i < type.Interfaces.Count; i++)
+                            foreach (JobDesc job in JobDescList)
                             {
-                                foreach (JobDesc job in JobDescList)
+                                if (type.Interfaces[i].InterfaceType.FullName == job.JobInterface.FullName)
                                 {
-                                    // For IJobForEach, pull of the generic part of the name by using GetElementType().
-                                    // We can match on the name which includes the pattern. (_ECC for example.)
-                                    if (type.Interfaces[i].InterfaceType.GetElementType().FullName == job.JobInterface.GetElementType().FullName)
-                                    {
-                                        // Find the Execute method, pull out the types. A full set of types
-                                        // is needed to close the Execute method.
-                                        var producerExecuteFn = job.JobProducerDef.Methods.First(m => m.Name == k_ProducerExecuteFn);
-                                        type.Methods.Add(GenGetExecuteMethodMethod(asm, type, producerExecuteFn, args));
-                                        type.Methods.Add(GenGetUnmanagedJobSizeMethodMethod(asm, type));
-                                        GenGetMarshalMethodMethods(asm, type);
+                                    var producerExecuteFn = job.JobProducerDef.Methods.First(m => m.Name == k_ProducerExecuteFn);
+                                    type.Methods.Add(GenGetExecuteMethodMethod(asm, type, producerExecuteFn, args));
+                                    type.Methods.Add(GenGetUnmanagedJobSizeMethodMethod(asm, type));
+                                    GenGetMarshalMethodMethods(asm, type);
 
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        else
-                        {
-                            for (int i = 0; i < type.Interfaces.Count; i++)
-                            {
-                                foreach (JobDesc job in JobDescList)
-                                {
-                                    if (type.Interfaces[i].InterfaceType.FullName == job.JobInterface.FullName)
-                                    {
-                                        var producerExecuteFn = job.JobProducerDef.Methods.First(m => m.Name == k_ProducerExecuteFn);
-                                        type.Methods.Add(GenGetExecuteMethodMethod(asm, type, producerExecuteFn, args));
-                                        type.Methods.Add(GenGetUnmanagedJobSizeMethodMethod(asm, type));
-                                        GenGetMarshalMethodMethods(asm, type);
-
-                                        found = true;
-                                        break;
-                                    }
+                                    found = true;
+                                    break;
                                 }
                             }
                         }
@@ -1186,7 +1155,6 @@ namespace Unity.ZeroPlayer
 
             // Go through each type, and if it is targeted by a JobProducer, add the IJobBase interface,
             // and the implementations of the various IJobBase methods.
-            // Also handle the special case of IJobForEach.
             foreach (var asm in m_Assemblies)
             {
                 foreach (var type in asm.MainModule.GetAllTypes())
@@ -1200,17 +1168,9 @@ namespace Unity.ZeroPlayer
                         throw new InvalidOperationException($"How am I seeing {type.FullName} more than once");
                     }
 
-                    JobDesc jobDesc = null;
+                    JobDesc jobDesc = FindJobProducer(type, true);
 
-                    bool isIJobForEach = type.IsStructWithInterface("Unity.Entities.JobForEachExtensions/IBaseJobForEach");
-
-                    // if it's not a IJobForEach, it must have a producer
-                    if (!isIJobForEach)
-                    {
-                        jobDesc = FindJobProducer(type, true);
-                    }
-
-                    if (jobDesc != null || isIJobForEach)
+                    if (jobDesc != null)
                     {
                         if (jobDesc != null && type.HasGenericParameters)
                         {

@@ -54,7 +54,10 @@ namespace UnsafeUtilityPatcher
         const string kUnsafeUtilityAddressOf                    = "AddressOf";
         const string kUnsafeUtilitySizeOf                       = "SizeOf";
         const string kUnsafeUtilitySizeOfNonGeneric             = "SizeOfNonGeneric";
+#if UNITY_2020_1_OR_NEWER
+#else
         const string kUnsafeUtilityAlignOf                      = "AlignOf";
+#endif
         const string kUnsafeUtilityReadArrayElement             = "ReadArrayElement";
         const string kUnsafeUtilityWriteArrayElement            = "WriteArrayElement";
         const string kUnsafeUtilityReadArrayElementWithStride   = "ReadArrayElementWithStride";
@@ -79,7 +82,10 @@ namespace UnsafeUtilityPatcher
             InjectUtilityCopyStructureToPtr(ctx);
             InjectUtilityAddressOf(ctx);
             InjectUtilitySizeOf(ctx);
+#if UNITY_2020_1_OR_NEWER
+#else
             InjectUtilityAlignOf(ctx);
+#endif
             InjectUtilityReadArrayElement(ctx);
             InjectUtilityReadArrayElementWithStride(ctx);
             InjectUtilityWriteArrayElement(ctx);
@@ -257,6 +263,8 @@ namespace UnsafeUtilityPatcher
 
 
 
+#if UNITY_2020_1_OR_NEWER
+#else
         private static void InjectUtilityAlignOf(UnsafeUtilityPatcherContext ctx)
         {
             var ilProcessor = GetILProcessorForMethod(ctx, kUnsafeUtilityAlignOf);
@@ -270,6 +278,7 @@ namespace UnsafeUtilityPatcher
             ilProcessor.Append(ilProcessor.Create(OpCodes.Ldc_I4, 4));
             ilProcessor.Append(ilProcessor.Create(OpCodes.Ret));
         }
+#endif
 
         private static void InjectUtilityAs(UnsafeUtilityPatcherContext ctx)
         {

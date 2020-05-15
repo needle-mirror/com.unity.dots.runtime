@@ -60,12 +60,26 @@ namespace Unity.Collections.LowLevel.Unsafe
             return PatchedUnsafeUtility.SizeOf<T>();
         }
 
+#if UNITY_2020_1_OR_NEWER
+        [StructLayout(LayoutKind.Sequential)]
+        private struct AlignOfHelper<T> where T : struct
+        {
+            public byte dummy;
+            public T data;
+        }
+
         // minimum alignment of a struct
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int AlignOf<T>() where T : struct
         {
+            return SizeOf<AlignOfHelper<T>>() - SizeOf<T>();
+        }
+#else
+        public static int AlignOf<T>() where T : struct
+        {
             return PatchedUnsafeUtility.AlignOf<T>();
         }
+#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ref T As<U, T>(ref U from)

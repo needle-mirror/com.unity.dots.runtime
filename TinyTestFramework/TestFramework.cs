@@ -36,6 +36,16 @@ namespace NUnit.Framework
     {
     }
 
+    /* These are intentionally *NOT* supported, so
+       the code won't compile. If OneTimeSetUp and
+       OneTimeTearDown get added, code needs to be
+       added to TestCaseILPP
+
+    public class OneTimeSetUp : Attribute {}
+    public class OneTimeTearDown : Attribute {}
+
+    */
+
     public class IgnoreAttribute : Attribute
     {
         public IgnoreAttribute(string msg)
@@ -45,11 +55,7 @@ namespace NUnit.Framework
 
     public class ValuesAttribute : Attribute
     {
-        public ValuesAttribute(params int[] list)
-        {
-        }
-
-        public ValuesAttribute(params bool[] list)
+        public ValuesAttribute(params object[] list)
         {
         }
 
@@ -61,7 +67,6 @@ namespace NUnit.Framework
     {
         public RepeatAttribute(int n)
         {
-
         }
     }
 

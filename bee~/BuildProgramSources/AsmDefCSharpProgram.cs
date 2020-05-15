@@ -104,8 +104,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
     protected override TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
     {
-        if (DoesTargetFullDotNet || IsILPostProcessorAssembly ||
-            (IsTestAssembly && ((DotsRuntimeCSharpProgramConfiguration)config).ScriptingBackend == ScriptingBackend.Dotnet))
+        if (IsILPostProcessorAssembly || (IsTestAssembly && ((DotsRuntimeCSharpProgramConfiguration)config).ScriptingBackend == ScriptingBackend.Dotnet))
         {
             return TargetFramework.NetStandard20;
         }
@@ -137,5 +136,4 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
     public bool IsTestAssembly => AsmDefDescription.OptionalUnityReferences.Contains("TestAssemblies");
     public bool IsILPostProcessorAssembly => AsmDefDescription.Name.EndsWith(".CodeGen");
-    public bool DoesTargetFullDotNet => AsmDefDescription.NamedReferences.Contains("Unity.FullDotNet");
 }

@@ -133,6 +133,20 @@ namespace Unity.Entities.Runtime.Build
             s_AlreadyWrittenDataFile = true;
         }
 
+        internal delegate string ResolvePackagePathHandler(string absolutePath);
+
+        /// <summary>
+        /// Allows internal development tools to resolve known symlinks in package file paths before feeding them
+        /// to the solution generation logic.
+        /// </summary>
+        internal static event ResolvePackagePathHandler resolvePackagePath;
+
+        static string ResolvePackagePath(string absolutePath)
+        {
+            var resolver = resolvePackagePath;
+            return resolver != null ? resolver(absolutePath) : absolutePath;
+        }
+
         internal static IEnumerable<AsmDefDescription> AllAssemblyDefinitions()
         {
             var guids = AssetDatabase.FindAssets("t:AssemblyDefinitionAsset");
@@ -150,7 +164,7 @@ namespace Unity.Entities.Runtime.Build
                 ret.Add(new AsmDefDescription
                 {
                     AsmdefName = asmdef.name,
-                    FullPath = Path.GetFullPath(fullpath.ToString()),
+                    FullPath = ResolvePackagePath(Path.GetFullPath(fullpath.ToString())),
                     Guid = guid,
                     PackageSource = packageSource
                 });

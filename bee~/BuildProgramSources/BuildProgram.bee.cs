@@ -603,7 +603,10 @@ public class BuildProgram
     private static NPath GameDeployDirectoryFor(AsmDefCSharpProgram game, DotsRuntimeCSharpProgramConfiguration config)
     {
         if (config.FinalOutputDirectory != null)
-            return new NPath("../..").Combine(config.FinalOutputDirectory);
+            if(config.FinalOutputDirectory.IsRelative)
+                return new NPath("../..").Combine(config.FinalOutputDirectory);
+            else
+                return config.FinalOutputDirectory;
         else
             return $"../../Builds/{config.Identifier}";
     }

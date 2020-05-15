@@ -21,7 +21,10 @@ public static class Program {
         // Don't call Dots Runtime Initialize here - only initialize safety handles
         // Anything else such as Player Connection or Profiler should be initialized/shutdown
         // on an individual basis for the test(s) that require these subsystems.
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
         AtomicSafetyHandle.Initialize();
+#endif
+        JobsUtility.Initialize();
         Unity.Entities.TypeManager.Initialize();
 
         // Should have stack trace with tests
@@ -42,7 +45,9 @@ public static class Program {
         UnsafeUtility.FreeTempMemory();
 
         Unity.Entities.TypeManager.Shutdown();
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
         AtomicSafetyHandle.Shutdown();
+#endif
 
         // If a test fails, this test suite just crashes.
         // DOTS-Runtime doesn't handle exceptions.
