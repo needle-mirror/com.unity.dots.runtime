@@ -65,7 +65,8 @@ namespace Unity.Entities.Runtime.Build
                 return BoolResult.False($"{nameof(DotsRuntimeBuildArtifact.OutputTargetFile)} is null.");
             }
 
-            if (!File.Exists(artifact.OutputTargetFile.FullName))
+            // TODO this should be platform specific
+            if (!File.Exists(artifact.OutputTargetFile.FullName) && !Directory.Exists(artifact.OutputTargetFile.FullName))
             {
                 return BoolResult.False($"Output target file '{artifact.OutputTargetFile.FullName}' not found.");
             }

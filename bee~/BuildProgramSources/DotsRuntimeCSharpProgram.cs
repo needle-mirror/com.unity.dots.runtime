@@ -36,7 +36,7 @@ public enum DotsConfiguration
 public class DotsRuntimeCSharpProgram : CSharpProgram
 {
     private bool _doneEnsureNativeProgramLinksToReferences;
-    
+
     public NPath MainSourcePath { get; }
     public List<NPath> ExtraSourcePaths { get; }
     private IEnumerable<NPath> AllSourcePaths => new[] {MainSourcePath}.Concat(ExtraSourcePaths);
@@ -45,7 +45,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
     public Platform[] ExcludePlatforms { get; set; }
 
     // Unilaterally enable warnings as errors for any assembly which matches one of the following patterns
-    static readonly string[] EnableWarningsAsErrorsPatterns = 
+    static readonly string[] EnableWarningsAsErrorsPatterns =
     {
         @"Unity\..*" // Force Warnings as Errors for all Unity asmdefs
     };
@@ -57,6 +57,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         @"Unity.Physics" // Currently generates warnings
     };
 
+
     public DotsRuntimeCSharpProgram(NPath mainSourcePath,
         IEnumerable<NPath> extraSourcePaths = null,
         string name = null,
@@ -66,7 +67,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         MainSourcePath = mainSourcePath;
         ExtraSourcePaths = extraSourcePaths?.ToList() ?? new List<NPath>();
         name = name ?? MainSourcePath.FileName;
-        
+
         if (!deferConstruction)
             Construct(name, isExe);
 
@@ -85,7 +86,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         Framework.Add(
             c => GetTargetFramework(c, this) == TargetFramework.NetStandard20,
             BuildProgram.HackedFrameworkToUseForProjectFilesIfNecessary);
-        
+
         ProjectFile.Path = DeterminePathForProjectFile();
 
         ProjectFile.ReferenceModeCallback = arg =>
@@ -111,6 +112,9 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         Defines.Add(c => GetTargetFramework(c, this) == TargetFramework.Tiny, "NET_DOTS");
         Defines.Add(c => GetTargetFramework(c, this) == TargetFramework.NetStandard20, "NET_STANDARD_2_0");
+
+        // Managed components are unsupported when using the Tiny BCL
+        Defines.Add(c => GetTargetFramework(c, this) == TargetFramework.Tiny, "UNITY_DISABLE_MANAGED_COMPONENTS");
 
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSPLAYER32");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSRUNTIME32");
@@ -339,11 +343,11 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         var libname = "lib_" + new NPath(FileName).FileNameWithoutExtension.ToLower().Replace(".", "_");
         NativeProgram = new NativeProgram(libname);
-        
+
         SetupDotsRuntimeNativeProgram(libname, NativeProgram);
         // sigh
         NativeProgram.Defines.Add("BUILD_" + MainSourcePath.FileName.ToUpper().Replace(".", "_") + "=1");
-        
+
         return NativeProgram;
     }
 
@@ -378,11 +382,19 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         //we don't want to do this for c#, because then burst sees different code from the unbursted path and it's very
         //easy and tempting to go insane this way. but for native, it's fine, since burst
-        //doesn't see that directly. and also, it enables us to error when we don't find the burst dll when burst is on, 
-        //and not look for it when it's off. 
+        //doesn't see that directly. and also, it enables us to error when we don't find the burst dll when burst is on,
+        //and not look for it when it's off.
         np.Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.UseBurst, "ENABLE_UNITY_BURST=1");
+
+        np.CompilerSettingsForEmscripten().Add(c =>
+                ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging,
+            c => c.WithMultithreading_Compiler(EmscriptenMultithreadingMode.Enabled));
+
+        np.StaticLinkerSettings()
+            .Add(c => c.ToolChain is EmscriptenToolchain && ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging,
+                s => s.WithCustomFlags_workaround(new[] {"-s", "USE_PTHREADS=1"}));
     }
-    
+
     protected virtual TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
     {
         if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
@@ -394,7 +406,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
     public override DotNetAssembly SetupSpecificConfiguration(CSharpProgramConfiguration config)
     {
         EnsureNativeProgramLinksToReferences();
-        
+
         var result = base.SetupSpecificConfiguration(config);
 
         return SetupNativeProgram(config, result);
@@ -421,7 +433,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         if (_doneEnsureNativeProgramLinksToReferences)
             return;
         _doneEnsureNativeProgramLinksToReferences = true;
-        
+
         NativeProgram?.Libraries.Add(npc =>
         {
             var csharpConfig = ((DotsRuntimeNativeProgramConfiguration) npc).CSharpConfig;
@@ -471,7 +483,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         public override IEnumerable<XElement> CustomMSBuildElements(NPath projectFileParentPath)
         {
-            if (SourcePath != projectFileParentPath && !SourcePath.IsChildOf(projectFileParentPath)) 
+            if (SourcePath != projectFileParentPath && !SourcePath.IsChildOf(projectFileParentPath))
                 return null;
 
             var relative = SourcePath.RelativeTo(projectFileParentPath).ToString(SlashMode.Native);
@@ -545,9 +557,9 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         }
         set { _platform = value; }
     }
-    
+
     public bool MultiThreadedJobs { get; private set; }
-    
+
     public bool EnableProfiler { get; }
 
     public bool UseBurst { get; }
@@ -613,9 +625,9 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         modifyCallback(copy);
         return copy;
     }
-    
+
     public List<string> Defines { get; set; }
-    
+
     public NPath FinalOutputDirectory { get; set; }
 }
 
@@ -631,6 +643,6 @@ public class DotsRuntimeNativeProgramConfiguration : NativeProgramConfiguration
     }
 
     public NativeProgramFormat ExecutableFormat => _executableFormat ?? base.ToolChain.ExecutableFormat;
-    
+
     public override string Identifier { get; }
 }

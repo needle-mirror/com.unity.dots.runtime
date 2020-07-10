@@ -1,9 +1,9 @@
 using System;
 using System.Runtime.InteropServices;
-using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.Assertions;
+using Unity.Burst;
 
 namespace Unity.Jobs.LowLevel.Unsafe
 {
@@ -77,7 +77,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
         Parallel = 1,
         Single = 2,                   // Unused in DOTS Runtime currently
         RunOnMainThread = 1000,       // Synced
-        ScheduleOnMainThread = 2000,  // Needs synced to satisfy safety system        
+        ScheduleOnMainThread = 2000,  // Needs synced to satisfy safety system
     }
 
     [AttributeUsage(AttributeTargets.Interface)]
@@ -389,7 +389,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
         [DllImport(nativejobslib, EntryPoint = "IsCompleted")]
         internal static extern int IsCompletedInternal(IntPtr scheduler, ref JobHandle jobHandle);
-        
+
         [DllImport(nativejobslib, EntryPoint = "IsMainThread")]
         internal static extern int IsMainThreadInternal();
 
@@ -487,6 +487,17 @@ namespace Unity.Jobs.LowLevel.Unsafe
             ManagedJobMarshalDelegate codegenMarshalToBurstDelegate = null)
         {
             return CreateJobReflectionData(type, _, executeDelegate, cleanupDelegate, codegenExecuteDelegate, codegenCleanupDelegate, codegenUnmanagedJobSize, codegenMarshalToBurstDelegate);
+        }
+
+        public static unsafe IntPtr CreateJobReflectionData(Type type,
+            Delegate executeDelegate,
+            Delegate cleanupDelegate = null,
+            ManagedJobForEachDelegate codegenExecuteDelegate = null,
+            ManagedJobDelegate codegenCleanupDelegate = null,
+            int codegenUnmanagedJobSize = -1,
+            ManagedJobMarshalDelegate codegenMarshalToBurstDelegate = null)
+        {
+            return CreateJobReflectionData(type, type, executeDelegate, cleanupDelegate, codegenExecuteDelegate, codegenCleanupDelegate, codegenUnmanagedJobSize, codegenMarshalToBurstDelegate);
         }
 
         public static unsafe IntPtr CreateJobReflectionData(Type type, Type _,
@@ -627,12 +638,22 @@ namespace Unity.Jobs.LowLevel.Unsafe
         }
 
 #if UNITY_SINGLETHREADED_JOBS
-        private static IntPtr s_FakeJobGroupId = IntPtr.Zero;
+        private struct FakeJobGroupIdKey { };
+#if UNITY_DOTSRUNTIME64
+        private readonly static SharedStatic<ulong> s_FakeJobGroupId = SharedStatic<ulong>.GetOrCreate<FakeJobGroupIdKey>();
         static internal IntPtr GetFakeJobGroupId()
         {
-            s_FakeJobGroupId = IntPtr.Add(s_FakeJobGroupId, 1);
-            return s_FakeJobGroupId;
+            s_FakeJobGroupId.Data++;
+            return (IntPtr)s_FakeJobGroupId.Data;
         }
+#else
+        private readonly static SharedStatic<uint> s_FakeJobGroupId = SharedStatic<uint>.GetOrCreate<FakeJobGroupIdKey>();
+        static internal IntPtr GetFakeJobGroupId()
+        {
+            s_FakeJobGroupId.Data++;
+            return (IntPtr)s_FakeJobGroupId.Data;
+        }
+#endif
 #endif
 
         static unsafe JobHandle ScheduleParallelForInternal(ref JobScheduleParameters parameters, int arrayLength, void* deferredDataPtr, int innerloopBatchCount)

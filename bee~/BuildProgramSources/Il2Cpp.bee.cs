@@ -72,7 +72,7 @@ public static class Il2Cpp
             if (HostPlatform.IsOSX)
                 return Distribution.Path.Combine("build/deploy/netcoreapp3.0/osx-x64/publish/il2cpp").ToString();
             if (HostPlatform.IsLinux)
-                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/osx-x64/publish/il2cpp").ToString();
+                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/linux-x64/publish/il2cpp").ToString();
             throw new NotImplementedException("IL2CPP is not built for the host platform");
         }
     }
@@ -131,7 +131,7 @@ public static class Il2Cpp
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
             
-            // Remove this comment to enable the managed debugger log file. It will be written to the working directory.
+            // Remove this comment to enable the managed debugger log file. It will be written to the working directory. For Web builds, the output will go to the browser's console.
             //Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER_LOGFILE=il2cpp-debugger.log");
             
             Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration != DotsConfiguration.Release, "IL2CPP_TINY_DEBUG_METADATA");
@@ -147,6 +147,8 @@ public static class Il2Cpp
             this.CompilerSettingsForEmscripten().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
             this.CompilerSettingsForIos().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
             NativeJobsPrebuiltLibrary.AddToNativeProgram(this); // Only required for managed debugging
+            this.CompilerSettingsForEmscripten().Add(ManagedDebuggingIsEnabled,
+                c => c.WithMultithreading_Compiler(EmscriptenMultithreadingMode.Enabled));
         }
 
 
@@ -216,7 +218,8 @@ public static class Il2Cpp
             // When the debugger is enabled, the develop and release configurations take a very long
             // time to build, because the debugger code generation injects lots of code. Limit the
             // assemblies that we generate debug information for so that build times will be reasonable.
-            if (config.DotsConfiguration == DotsConfiguration.Develop ||
+            if (config.Platform is WebGLPlatform ||
+                config.DotsConfiguration == DotsConfiguration.Develop ||
                 config.DotsConfiguration == DotsConfiguration.Release)
             {
                 foreach (var assembly in inputAssembly.RecursiveRuntimeDependenciesIncludingSelf.Where(r => r is DotNetAssembly))
@@ -358,6 +361,10 @@ public static class Il2Cpp
                 {c => c.Platform is MacOSXPlatform, new PrecompiledLibrary[] {new SystemFramework("CoreFoundation")}},
                 {c => c.Platform is LinuxPlatform, new SystemLibrary("dl")},
                 {c => c.Platform is AndroidPlatform, new[] { new SystemLibrary("log")}}
+            },
+            Defines =
+            {
+                { c => c.Platform is AndroidPlatform && c.ToolChain.Architecture is Arm64Architecture && ManagedDebuggingIsEnabled(c), "TARGET_ARM64"},
             }
         };
 
@@ -524,6 +531,9 @@ public static class Il2Cpp
 
         //program.CompilerSettingsForMsvc().Add(l => l.WithCompilerRuntimeLibrary(CompilerRuntimeLibrary.None));
 
+        program.CompilerSettingsForEmscripten().Add(ManagedDebuggingIsEnabled, c => c.WithMultithreading_Compiler(EmscriptenMultithreadingMode.Enabled));
+        program.StaticLinkerSettings().Add(c => c.ToolChain is EmscriptenToolchain && ManagedDebuggingIsEnabled(c), s => s.WithCustomFlags_workaround(new[] {"-s", "USE_PTHREADS=1"}));
+
         return program;
     }
 
@@ -561,6 +571,8 @@ public static class Il2Cpp
         program.Defines.Add(c => !(c.Platform is WebGLPlatform), "GC_THREADS=1", "USE_MMAP=1", "USE_MUNMAP=1");
         program.Defines.Add(c => c.Platform is WebGLPlatform, "EMSCRIPTEN_TINY=1");
         program.Defines.Add(c => c.ToolChain is VisualStudioToolchain, "NOMINMAX", "WIN32_THREADS");
+        program.CompilerSettingsForEmscripten().Add(ManagedDebuggingIsEnabled,
+            c => c.WithMultithreading_Compiler(EmscriptenMultithreadingMode.Enabled));
         //program.CompilerSettingsForMsvc().Add(l => l.WithCompilerRuntimeLibrary(CompilerRuntimeLibrary.None));
         return program;
     }

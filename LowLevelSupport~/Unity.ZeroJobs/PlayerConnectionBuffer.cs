@@ -30,6 +30,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using Unity.Burst;
 using Unity.Collections.LowLevel.Unsafe;
 #if ENABLE_PROFILER
 using Unity.Development.Profiling;
@@ -168,6 +169,28 @@ namespace Unity.Development.PlayerConnection
             }
         }
 
+        private enum ErrorType
+        {
+            FlushPastEnd,
+            FlushWithOffsetPastEnd,
+            BadOffsetEnd,
+        }
+
+        [BurstDiscard]
+        private static void ThrowError(ErrorType err)
+        {
+            switch (err)
+            {
+                case ErrorType.FlushPastEnd:
+                    throw new ArgumentException("Flushing buffer past end");
+                case ErrorType.FlushWithOffsetPastEnd:
+                    throw new ArgumentOutOfRangeException("Flushing buffer with offset past end");
+                case ErrorType.BadOffsetEnd:
+                    throw new ArgumentOutOfRangeException("Bad offsetEnd in Player Connection data size");
+            }
+        }
+
+
         // Used for send memory usage patterns (recycle without deallocation)
         // Clear buffers in the list until a desired node, and if there is a buffer which is partially finished
         // reduce it to the remaining data only.
@@ -187,9 +210,9 @@ namespace Unity.Development.PlayerConnection
             if (recycleUntilPlusOffset > 0)
             {
                 if (recycleUntil == null)
-                    throw new ArgumentException("Flushing buffer past end");
+                    ThrowError(ErrorType.FlushPastEnd);
                 if (recycleUntilPlusOffset > recycleUntil->Size)
-                    throw new ArgumentOutOfRangeException("Flushing buffer with offset past end");
+                    ThrowError(ErrorType.FlushWithOffsetPastEnd);
 
                 unsafe
                 {
@@ -223,7 +246,7 @@ namespace Unity.Development.PlayerConnection
         public byte[] ToByteArray(int offsetBegin, int offsetEnd)
         {
             if (offsetEnd > TotalBytes || offsetEnd < offsetBegin)
-                throw new ArgumentOutOfRangeException("Bad offsetEnd in Player Connection data size");
+                ThrowError(ErrorType.BadOffsetEnd);
 
             int bytesLeft = offsetEnd - offsetBegin;
             byte[] data = new byte[bytesLeft];
@@ -292,6 +315,27 @@ namespace Unity.Development.PlayerConnection
         private int m_DeferredSizeStart;
         private bool m_ResubmitStream;
 
+        private enum ErrorType
+        {
+            WriteRawDataNull,
+            CantDeferHeader,
+            CantPatchHeader,
+        }
+
+        [BurstDiscard]
+        private static void ThrowError(ErrorType err)
+        {
+            switch (err)
+            {
+                case ErrorType.WriteRawDataNull:
+                    throw new ArgumentNullException("'data' is null in WriteRaw");
+                case ErrorType.CantDeferHeader:
+                    throw new InvalidOperationException("Can't defer player connection message header - previous one not patched");
+                case ErrorType.CantPatchHeader:
+                    throw new InvalidOperationException("Can't patch player connection message header - nothing to patch");
+            }
+        }
+
         public unsafe bool HasDataToSend => m_BufferList->TotalBytes > 0;
         public unsafe int DataToSendBytes => m_BufferList->TotalBytes;
         public unsafe int DeferredSize => (m_DeferredSizePtr == null) ? 0 : m_BufferList->TotalBytes - m_DeferredSizeStart;
@@ -314,7 +358,7 @@ namespace Unity.Development.PlayerConnection
             if (dataBytes == 0)
                 return;
             if (data == null)
-                throw new ArgumentNullException("'data' is null in WriteRaw");
+                ThrowError(ErrorType.WriteRawDataNull);
             m_BufferList->Allocate(dataBytes);
             UnsafeUtility.MemCpy((void*)(m_BufferList->BufferWrite->Buffer + m_BufferList->BufferWrite->Size), data, dataBytes);
             m_BufferList->UpdateSize(dataBytes);
@@ -328,7 +372,7 @@ namespace Unity.Development.PlayerConnection
         public unsafe void MessageBegin(UnityGuid messageId)
         {
             if (m_DeferredSizePtr != null)
-                throw new InvalidOperationException("Can't defer player connection message header - previous one not patched");
+                ThrowError(ErrorType.CantDeferHeader);
 
             // By making bufferListSwap NOT equivalent to bufferList, we signify "locking" the bufferList.
             fixed (MessageStream** bufferListSwapPtr = &m_BufferListSwap)
@@ -350,7 +394,7 @@ namespace Unity.Development.PlayerConnection
         public unsafe void MessageEnd()
         {
             if (m_DeferredSizePtr == null)
-                throw new InvalidOperationException("Can't patch player connection message header - nothing to patch");
+                ThrowError(ErrorType.CantPatchHeader);
 
             while ((m_BufferList->TotalBytes & 3) != 0)
                 WriteData((byte)0);
@@ -502,6 +546,7 @@ namespace Unity.Development.PlayerConnection
 
         public unsafe static void DestroyStreamBuilder(MessageStreamBuilder* buffer)
         {
+            buffer->m_BufferList->Free();
             UnsafeUtility.Free(buffer, Collections.Allocator.Persistent);
             PlayerConnectionMt_UnregisterStreamBuilder((IntPtr)buffer);
         }

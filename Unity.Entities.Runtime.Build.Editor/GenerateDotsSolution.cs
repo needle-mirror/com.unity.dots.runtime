@@ -555,7 +555,7 @@ namespace Unity.Entities.Runtime.Build
                 }
             }
 
-            class RootAssemblyInfo
+            class RootAssemblyInfo : IEquatable<RootAssemblyInfo>
             {
                 public string ProjectName;
                 public RootAssemblyInfo(string projectName)
@@ -563,13 +563,12 @@ namespace Unity.Entities.Runtime.Build
                     ProjectName = projectName;
                 }
 
-                public override bool Equals(object obj)
+                public bool Equals(RootAssemblyInfo obj)
                 {
-                    if (ReferenceEquals(null, obj)) return false;
-                    if (ReferenceEquals(this, obj)) return true;
-                    if (obj.GetType() != typeof(RootAssemblyInfo)) return false;
+                    if (obj == null )
+                        return false;
 
-                    return ((RootAssemblyInfo)obj).ProjectName == ProjectName;
+                    return obj.ProjectName == ProjectName;
                 }
 
                 public override int GetHashCode()
@@ -765,8 +764,8 @@ namespace Unity.Entities.Runtime.Build
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities()))
                             steps.Add(typeof(BuildStepExportEntities));
 
-                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities2()))
-                            steps.Add(typeof(BuildStepExportEntities2));
+                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportScenes()))
+                            steps.Add(typeof(BuildStepExportScenes));
 
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration()))
                             steps.Add(typeof(BuildStepExportConfiguration));

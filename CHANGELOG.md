@@ -4,17 +4,50 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2020-07-10
+
+### Added
+
+* Add support for managed code debugging with Wasm
+* Unity.Tiny.<various>.Tests are now run in IL2CPP on desktop and part of our CI.
+* Unity.Collections.Tests are now run in IL2CPP on desktop and part of our CI.
+* Burst is now supported for non-debug Wasm and AsmJs builds.
+* Optimized Allocator.Temp allocations
+
+### Changed
+
+* Upgraded Burst to 1.4.0-preview.2 version.
+* Managed components are no longer supported when building for in the Tiny configuration. Thus all components must be defined using `struct` instead of `class`.
+
+### Deprecated
+
+
+### Removed
+
+
+### Fixed
+
+* Fixes an issue where PlayerConnection message handlers could not allocate memory from `Allocator.Temp`
+* Adds build compatibility support (not feature parity) for Unity 2020.2 Unity.Jobs API
+* Post-schedule dependency update in some job configurations
+* Fixed a bug where IL2CPP Script Debugging would not be enabled when using the `UseBuildConfiguration` value and building in `develop`
+* Specifically timed race conditions when creating markers while transmitting player connection buffers
+
+### Security
+
+
+
+
 ## [0.28.0] - 2020-07-10
 
 ### Added
 
 * Support for sources common for BuildProgram and for Editor assemblies (these sources should be in "bee" folders instead of "bee~" for BuildProgram specific sources)
-* Job Debugger with 1:1 parity to Hybrid DOTS Job Debugger
 
 ### Changed
 
 * Updated minimum Unity Editor version to 2020.1.0b15 (40d9420e7de8)
-* Upgraded Burst to 1.4.0-preview.2 version.
+* Upgraded Burst to 1.4.0-preview.1 version.
 
 ### Deprecated
 

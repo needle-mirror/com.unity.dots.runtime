@@ -30,7 +30,8 @@ public static class DotsConfigs
                     Backend.Current.RegisterFileInfluencingGraph(settingsFile);
                     var settingsObject = new FriendlyJObject {Content = JObject.Parse(settingsFile.ReadAllText())};
 
-                    if(settingsObject.GetInt("Version", 0) != AsmDefConfigFile.BuildSettingsFileVersion)
+                    if (settingsObject.GetInt("Version", 0) != AsmDefConfigFile.BuildSettingsFileVersion ||
+                        AsmDefConfigFile.AsmDefDescriptionFor(settingsObject.GetString("RootAssembly")) == null)
                     {
                         Console.WriteLine($"Found old settings file '{settingsFile}', removing...");
                         settingsFile.Delete();
@@ -47,15 +48,18 @@ public static class DotsConfigs
                     // Need to know this prior to determining need for burst
                     var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging",
                         new[] { DotsConfiguration.Debug }, settingsObject);
-                    if (target.Identifier == "asmjs" || target.Identifier == "wasm")
+                    if (target.Identifier == "asmjs")
                         mdb = false;
 
                     var multithreading = settingsObject.GetBool("EnableMultithreading");
                     var targetUsesBurst = settingsObject.GetBool("EnableBurst");
                     if (!targetUsesBurst && multithreading)
                     {
-                        // This is only really a problem in il2cpp with tiny profile (so it actually works with managed debugging which uses full il2cpp)
-                        if (target.ScriptingBackend == ScriptingBackend.TinyIl2cpp && !mdb)
+                        // We currently do not support multithreaded debugging anywhere except .NET Framework and CoreCLR (so, Windows only)
+                        // or il2cpp full profile
+                        bool isFullIl2cpp = target.ScriptingBackend == ScriptingBackend.TinyIl2cpp && mdb;
+                        bool isWindows = target.ToolChain.Platform is WindowsPlatform;
+                        if (!(isFullIl2cpp || isWindows))
                         {
                             Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
                                 $"specified 'EnableBurst=False', but 'Multithreading=True'. Multithreading requires Burst, therefore enabling Burst.");
@@ -73,6 +77,14 @@ public static class DotsConfigs
                     {
                         Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
                             $"specified 'EnableBurst', but target ({target.Identifier}) does not support burst yet. Not using burst.");
+                        targetUsesBurst = false;
+                    }
+
+                    // Workaround to disable burst in web debug builds since it will fail to compile
+                    // https://unity3d.atlassian.net/browse/DOTSR-1886
+                    if (targetUsesBurst && target is DotsWebTarget && codegen == CSharpCodeGen.Debug)
+                    {
+                        Console.WriteLine($"Warning: Web currently does not support building in debug configuration with Burst. Disabling burst....");
                         targetUsesBurst = false;
                     }
 

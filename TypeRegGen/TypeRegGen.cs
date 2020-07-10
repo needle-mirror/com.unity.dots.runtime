@@ -158,7 +158,6 @@ namespace Unity.ZeroPlayer
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
             m_interfaceGen.InjectBurstInfrastructureMethods();
-            m_interfaceGen.PatchJobDebuggerStringTable();
 
             ScanAndInjectCustomBootstrap();
 
@@ -182,7 +181,7 @@ namespace Unity.ZeroPlayer
             var asmRegTypeList = new List<TypeDefinition>();
             foreach (var asm in m_AssemblyDefs)
             {
-                if (asm.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == "Unity.Entities") == null)
+                if (asm.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == "Unity.Entities") == null && asm.Name.Name != "Unity.Entities")
                     continue;
 
                 foreach (var type in asm.MainModule.GetAllTypes().Where(t => t.IsClass))

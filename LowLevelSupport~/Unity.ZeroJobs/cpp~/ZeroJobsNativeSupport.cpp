@@ -15,6 +15,20 @@ Time_GetTicksMicrosecondsMonotonic()
     return ((int64_t)Baselib_Timer_GetHighPrecisionTimerTicks() * conversion.ticksToNanosecondsNumerator / conversion.ticksToNanosecondsDenominator) / NS_TO_US;
 }
 
+DOTS_EXPORT(uint64_t)
+Time_GetTicksToNanosecondsConversionRatio_Numerator()
+{
+    static Baselib_Timer_TickToNanosecondConversionRatio conversion = Baselib_Timer_GetTicksToNanosecondsConversionRatio();
+    return conversion.ticksToNanosecondsNumerator;
+}
+
+DOTS_EXPORT(uint64_t)
+Time_GetTicksToNanosecondsConversionRatio_Denominator()
+{
+    static Baselib_Timer_TickToNanosecondConversionRatio conversion = Baselib_Timer_GetTicksToNanosecondsConversionRatio();
+    return conversion.ticksToNanosecondsDenominator;
+}
+
 static void* gTempSliceHandle = NULL;
 static baselib::mpmc_node_queue<baselib::mpmc_node> safetyNodeQueue;
 static baselib::Lock safetyHashLock;

@@ -4,12 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
 </head>
+<div id="waitForManagedDebugger" style="display:none">
+	<h1 style="text-align:center;">
+		<div id="waitForManagedDebuggerMessage"></div>
+		<button onclick="doneWaitingForDebugger()">Continue</button>
+	</h1>
+</div>
 <body style="margin:0px; border:none; overflow:hidden; display:block;">
 <div id="error_log"></div>
 <canvas id="UT_CANVAS" tabindex="1" style='display:block; touch-action:none;'></canvas>
 <script>
-#if !MODULARIZE
-  var Module = {};
+#if !MODULARIZE || MODULARIZE_INSTANCE
+  var Module = {
+#if USE_PTHREADS
+    worker: '{{{ PTHREAD_WORKER_FILE }}}'
+#endif
+};
 #endif
 
 #if WASM == 2
@@ -20,6 +30,9 @@
 // in your own shell file to take a different action. Default behavior is to show a red error ribbon
 // at the top of the page.
 function fatal(msg) {
+	// Emscripten runtime throws a string "unwind" to unwind out from a nested Wasm callstack to yield execution back to the browser
+	if (msg.indexOf("unwind") != -1)
+		return;
 	fatal.count = (fatal.count|0)+1;
 	if (fatal.count < 20) { // Cap the number of errors that are printed to prevent an infinite cascade if there is an error each frame.
 		document.querySelector('#error_log').innerHTML += "<div style='background-color:red; border: 2px solid yellow; padding: 5px; font-weight: bold; font-size: 2em '>" + msg + '</div>';
@@ -49,6 +62,10 @@ window.onerror = function(message, source, lineno, colno) {
 	if (colno) msg += ':' + colno;
 	msg += (msg ? ':':'') + message;
 	fatal(msg);
+}
+
+function doneWaitingForDebugger() {
+  document.getElementById("waitForManagedDebugger").style.display = "none";
 }
 
 // Register a callback function that will be called when the given event occurs.

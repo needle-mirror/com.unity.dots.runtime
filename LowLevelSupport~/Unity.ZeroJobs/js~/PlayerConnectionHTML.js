@@ -90,8 +90,13 @@ mergeInto(LibraryManager.library, {
             return 0;
 
         // readyState 1 is OPEN i.e. ready
-        if (this.ws && this.ws.readyState == 1)
+        if (this.ws && this.ws.readyState == 1) {
+#if USE_PTHREADS
+            this.ws.send(new Uint8Array(HEAPU8.subarray(data, data + size)));
+#else
             this.ws.send(HEAPU8.subarray(data, data + size));
+#endif
+        }
 
         // Error if:
         // - not initialized

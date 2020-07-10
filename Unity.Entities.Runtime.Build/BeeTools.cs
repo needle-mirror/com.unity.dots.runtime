@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using Unity.Build;
+using Unity.Build.Internals;
 using Unity.Build.DotsRuntime;
 
 namespace Unity.Entities.Runtime.Build
@@ -20,7 +21,7 @@ namespace Unity.Entities.Runtime.Build
             public string FullInfo;
             public bool IsDone;
             public int ExitCode;
-            public Process Process;
+            public ShellProcess Process;
         }
 
         static IEnumerator<BeeProgressInfo> Run(string arguments, StringBuilder command, StringBuilder output, DirectoryInfo workingDirectory = null)
@@ -77,7 +78,7 @@ namespace Unity.Entities.Runtime.Build
                 }
             }
 
-            var config = new ShellProcessArgs()
+            var config = new ShellProcessArguments()
             {
                 Executable = executable,
                 Arguments = new[] { arguments },
@@ -100,14 +101,14 @@ namespace Unity.Entities.Runtime.Build
                 ErrorDataReceived = ProgressHandler
             };
 
-            var bee = Shell.RunAsync(config);
+            var bee = ShellProcess.Start(config);
             progressInfo.Process = bee;
 
             yield return progressInfo;
 
             const int maxBuildTimeInMs = 30 * 60 * 1000; // 30 minutes
 
-            var statusEnum = Shell.WaitForProcess(bee, maxBuildTimeInMs, config.MaxIdleKillIsAnError);
+            var statusEnum = bee.WaitForProcess(maxBuildTimeInMs);
             while (statusEnum.MoveNext())
             {
                 yield return progressInfo;
@@ -115,7 +116,7 @@ namespace Unity.Entities.Runtime.Build
 
             progressInfo.Progress = 1.0f;
             progressInfo.IsDone = true;
-            progressInfo.ExitCode = bee.ExitCode;
+            progressInfo.ExitCode = bee.Process.ExitCode;
             progressInfo.Info = "Build completed";
             yield return progressInfo;
         }
@@ -162,7 +163,7 @@ namespace Unity.Entities.Runtime.Build
             {
                 if (progress?.Update(beeProgressInfo.Current.Info, beeProgressInfo.Current.Progress) ?? false)
                 {
-                    beeProgressInfo.Current.Process?.Kill();
+                    beeProgressInfo.Current.Process?.Process?.Kill();
                     return new BeeRunResult(-1, command.ToString(), "Build was cancelled.");
                 }
             }

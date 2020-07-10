@@ -3,7 +3,11 @@ using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Burst;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-using Unity.Development.JobsDebugger;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+using Unity.Jobs;
+using Unity.Collections;
 #endif
 #if ENABLE_PLAYERCONNECTION
 using Unity.Development.PlayerConnection;
@@ -114,7 +118,6 @@ namespace Unity.Core
             JobsUtility.Initialize();
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.Initialize();
-            JobNames.Initialize();
 #endif
 #if ENABLE_PLAYERCONNECTION
             Connection.Initialize();
@@ -151,6 +154,8 @@ namespace Unity.Core
 
         public static void UpdatePreFrame()
         {
+            TempMemoryScope.EnterScope();
+
             if (firstFrame)
             {
 #if ENABLE_PROFILER
@@ -160,8 +165,6 @@ namespace Unity.Core
 #endif
                 firstFrame = false;
             }
-
-            TempMemoryScope.EnterScope();
         }
 
         public static void UpdatePostFrame(bool willContinue)
@@ -170,19 +173,9 @@ namespace Unity.Core
             ProfilerStats.CalculateStatsSnapshot();
 #endif
 
-            TempMemoryScope.ExitScope();
-            UnsafeUtility.FreeTempMemory();
-
 #if ENABLE_PROFILER
             mainMarker.End();
             rootMarker.End();
-
-            ProfilerProtocolSession.SendProfilerStats();
-
-            // Calculated per frame
-            ProfilerStats.GatheredStats = ProfilerModes.ProfileDisabled;
-
-            ProfilerProtocolSession.SendNewMarkersAndThreads();
 #endif
 
 #if ENABLE_PLAYERCONNECTION
@@ -197,6 +190,78 @@ namespace Unity.Core
                 mainMarker.Begin();
             }
 #endif
+
+            TempMemoryScope.ExitScope();
+            UnsafeUtility.FreeTempMemory();
         }
     }
 }
+
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+
+namespace Unity.Development
+{
+    public class ErrorReporter
+    {
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        public unsafe static void ReportError(string message, int jobNameOffset, int otherJobNameOffset, int fieldNameOffset, int otherFieldNameOffset)
+        {
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Size = 1)]
+    public unsafe struct DependencyValidator
+    {
+        // Allocate memory for resources with known usage semantics.
+        // Excludes dynamic safety handles which are unknown and determined at runtime.
+        public static void AllocateKnown(ref DependencyValidator data, int numReadOnly, int numWritable, int numDeallocate)
+        {
+        }
+
+        public static void Cleanup(ref DependencyValidator data)
+        {
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void RecordAndSanityCheckReadOnly(ref DependencyValidator data, ref AtomicSafetyHandle handle, int fieldNameBlobOffset, int jobNameOffset)
+        {
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void RecordAndSanityCheckWritable(ref DependencyValidator data, ref AtomicSafetyHandle handle, int fieldNameBlobOffset, int jobNameOffset)
+        {
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void RecordDeallocate(ref DependencyValidator data, ref AtomicSafetyHandle handle)
+        {
+        }
+
+        public static void RecordAndSanityCheckDynamic(ref DependencyValidator data, ref AtomicSafetyHandle firstHandle, int fieldNameBlobOffset, int jobNameOffset, int handleCountReadOnly, int handleCountWritable, int handleCountForceReadOnly)
+        {
+        }
+
+        // Checks dependencies and aliasing
+        public static void ValidateScheduleSafety(ref DependencyValidator data, ref JobHandle dependsOn, int jobNameOffset)
+        {
+        }
+
+        // Checks deferred array ownership
+        public static void ValidateDeferred(ref DependencyValidator data, void* deferredHandle)
+        {
+        }
+
+        // Checks deallocation constraints
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ValidateDeallocateOnJobCompletion(Allocator allocType)
+        {
+        }
+
+        public static void UpdateDependencies(ref DependencyValidator data, ref JobHandle handle, int jobNameOffset)
+        {
+        }
+    }
+}
+
+#endif // ENABLE_UNITY_COLLECTIONS_CHECKS

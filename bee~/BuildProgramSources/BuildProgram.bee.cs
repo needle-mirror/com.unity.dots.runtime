@@ -166,8 +166,9 @@ public class BuildProgram
         BurstCompiler.BurstExecutable = GetBurstExecutablePath(burstAsmDef).QuoteForProcessStart();
 
         var ilPostProcessorPrograms = asmDefDescriptions
-            .Where(d => d.Name.EndsWith(".CodeGen") && !d.DefineConstraints.Contains("!NET_DOTS"))
+            .Where(d => d.IsILPostProcessorAssembly)
             .Select(GetOrMakeDotsRuntimeCSharpProgramFor);
+
         ILPostProcessorAssemblies = ilPostProcessorPrograms.Select(p =>
             {
                 /*
@@ -265,71 +266,6 @@ public class BuildProgram
         }
 
         return burstAsmDef.Path.Parent.Parent.Combine(".Runtime/bcl.exe");
-    }
-
-    private static bool IsTestProgramDotsRuntimeCompatible(DotsRuntimeCSharpProgram arg)
-    {
-        //We need a better way of knowing which asmdefs are supposed to work on dots-runtime, and which do not.  for now use a simple heuristic of "is it called Editor or is it called Hybrid"
-        var allFileNames = Enumerable.Append(arg.References.ForAny().OfType<CSharpProgram>().Select(r => r.FileName), arg.FileName).ToArray();
-        if (allFileNames.Any(f=>f.Contains("Editor")))
-            return false;
-        if (allFileNames.Any(f=>f.Contains("Hybrid")))
-            return false;
-        if (allFileNames.Any(f=>f.Contains("Unity.TextMeshPro")))
-            return false;
-        if (allFileNames.Any(f => f.Contains("Unity.ugui")))
-            return false;
-        //in theory, all tests for assemblies that are used by dotsruntime targetting programs should be dots runtime compatible
-        //unfortunately we have some tests today that test dotsruntime compatible code,  but the testcode itself is not dotsruntime compatible.
-        //blacklist these for now
-        if (arg.FileName.Contains("Unity.Scenes.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.Build.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.Build.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.Authoring"))
-            return false;
-        if (arg.FileName.Contains("Unity.Serialization"))
-            return false;
-        if (arg.FileName.Contains("Unity.Entities.Reflection.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.Properties"))
-            return false;
-        if (arg.FileName.Contains("Unity.Entities.Properties"))
-            return false;
-        if (arg.FileName.Contains("Unity.Burst.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.jobs.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.Collections.Tests"))
-            return false;
-        if (arg.FileName.Contains("Automation.Tests"))
-            return false;
-        if (arg.FileName.Contains("Unity.PerformanceTesting"))
-            return false;
-        if (arg.FileName.Contains(".CodeGen"))
-            return false;
-        if (arg.FileName.Contains("Unity.Entities.Determinism.Tests"))
-            return false;
-
-        return true;
-    }
-
-    static void SetupTestForConfig(string name, AsmDefCSharpProgram testProgram, DotsRuntimeCSharpProgramConfiguration config)
-    {
-        var builtTest = testProgram.SetupSpecificConfiguration(config);
-        var postILProcessedTest = ILPostProcessorTool.SetupInvocation(builtTest, config, testProgram.Defines.For(config).ToArray());
-        var postTypeRegGenTest = TypeRegistrationTool.SetupInvocation(postILProcessedTest, config);
-
-        NPath deployDirectory = GameDeployDirectoryFor(testProgram, config);
-        var deployed = postTypeRegGenTest.DeployTo(deployDirectory);
-
-        testProgram.ProjectFile.OutputPath.Add(c => c == config, deployDirectory);
-        testProgram.ProjectFile.BuildCommand.Add(c => c == config, new BeeBuildCommand(deployed.Path.ToString(), false, false).ToExecuteArgs());
-
-        Backend.Current.AddAliasDependency($"{name.ToLower()}-{ config.Identifier}", deployed.Path);
-        Backend.Current.AddAliasDependency("tests", deployed.Path);
     }
 
     //waiting for the burst release with BurstCompilerForLinux in Burst.bee.cs
@@ -450,7 +386,12 @@ public class BuildProgram
                         burstCompiler.TargetArchitecture = "ARMV8A_AARCH64";
                     }
                 }
-
+                else if (config.Platform is WebGLPlatform)
+                {
+                    burstCompiler = new BurstCompilerForEmscripten();
+                    burstCompiler.EnableStaticLinkage = true;
+                    burstCompiler.DisableVectors = false;
+                }
 
                 // Only generate marshaling info for platforms that require marshalling (e.g. Windows DotNet)
                 // but also if collection checks are enabled (as that is why we need marshalling)
@@ -459,13 +400,6 @@ public class BuildProgram
                 burstCompiler.DisableWarnings = "BC1370"; // Suppress warning for burst function throwing an exception
 
                 var outputDir = $"artifacts/{game.Name}/{config.Identifier}_bursted";
-                var isWebGL = config.Platform is WebGLPlatform;
-                var extension = config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat.Extension;
-
-                //burst generates a .bundle on os x.
-                if (config.Platform is MacOSXPlatform)
-                    extension = "bundle";
-
                 var burstLibName = "lib_burst_generated";
                 DotNetAssembly burstedGame = setupGame;
 
@@ -483,6 +417,10 @@ public class BuildProgram
                     il2CppOutputProgram.Defines.Add(
                         c => c.Equals(config.NativeProgramConfiguration),
                         $"FORCE_PINVOKE_{burstLibName}_INTERNAL");
+                }
+                else if (config.Platform is WebGLPlatform)
+                {
+                    il2CppOutputProgram.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
                 }
                 else
                 {
@@ -688,14 +626,32 @@ public class BuildProgram
     {
         if (config.Platform is WebGLPlatform)
             return new BrowserStartInfo(new Uri(deployedGamePath.MakeAbsolute().ToString(SlashMode.Native)).AbsoluteUri);
-        
+
         return new ExecutableStartInfo(new Shell.ExecuteArgs() {Executable = deployedGamePath, WorkingDirectory = deployedGamePath.Parent }, true);
     }
 
     static readonly Cache<AsmDefCSharpProgram, AsmDefDescription> _cache = new Cache<AsmDefCSharpProgram, AsmDefDescription>();
 
-    public static AsmDefCSharpProgram GetOrMakeDotsRuntimeCSharpProgramFor(
-        AsmDefDescription asmDefDescription) =>
-        _cache.GetOrMake(asmDefDescription, () => new AsmDefCSharpProgram(asmDefDescription));
+    static List<AsmDefDescription> BuildStack = new List<AsmDefDescription>();
 
+    public static AsmDefCSharpProgram GetOrMakeDotsRuntimeCSharpProgramFor(
+        AsmDefDescription asmDefDescription)
+    {
+        return _cache.GetOrMake(asmDefDescription, () =>
+        {
+            if (BuildStack.Contains(asmDefDescription))
+            {
+                Console.WriteLine($"Fatal Error: recursive asmdef or build program dependency detected!");
+                foreach (var bs in BuildStack)
+                    Console.WriteLine($"   {bs.Name}");
+                Console.WriteLine($"-> {asmDefDescription.Name}");
+                throw new InvalidProgramException("Recursive asmdef dependencies");
+            }
+
+            BuildStack.Add(asmDefDescription);
+            var prog = new AsmDefCSharpProgram(asmDefDescription);
+            BuildStack.RemoveAt(BuildStack.Count - 1);
+            return prog;
+        });
+    }
 }

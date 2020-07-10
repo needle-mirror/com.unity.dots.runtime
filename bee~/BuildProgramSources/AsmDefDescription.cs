@@ -10,7 +10,7 @@ public class AsmRefDescription
     public NPath Path { get; }
     public string PackageSource { get; }
     private JObject Json;
-    
+
     public AsmRefDescription(NPath path, string packageSource)
     {
         Path = path;
@@ -33,24 +33,27 @@ public class AsmDefDescription
         Path = path;
         PackageSource = packageSource;
         Json = JObject.Parse(path.ReadAllText());
+        
+        Name = Json["name"].Value<string>();
         IncludedAsmRefs = AsmDefConfigFile.AsmRefs.Where(desc => desc.Reference == Name).ToList();
-    }
+        
+        AllowUnsafeCode = Json["allowUnsafeCode"]?.Value<bool>() == true;
+        AutoReferenced = Json["autoReferenced"]?.Value<bool>() == true;
+        NoEngineReferences = Json["noEngineReferences"]?.Value<bool>() == true;
+        OverrideReferences = Json["overrideReferences"]?.Value<bool>() == true;
+        
+        DefineConstraints = Json["defineConstraints"]?.Values<string>().ToArray() ?? Array.Empty<string>();
+        OptionalUnityReferences = Json["optionalUnityReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
+        PrecompiledReferences = Json["precompiledReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
 
-    public string Name => Json["name"].Value<string>();
-    public List<AsmRefDescription> IncludedAsmRefs { get; }
+        IsTestAsmDef = DefineConstraints.Contains("UNITY_INCLUDE_TESTS") || OptionalUnityReferences.Contains("TestAssemblies") || PrecompiledReferences.Contains("nunit.framework.dll");
+        IsILPostProcessorAssembly = Name.EndsWith(".CodeGen") && !DefineConstraints.Contains("!NET_DOTS");
 
-    private string[] FixedNamedReferences;
-    public string[] NamedReferences
-    {
-        get
-        {
-            if (FixedNamedReferences == null)
-            {
-                FixedNamedReferences = Json["references"]?.Values<string>().Select(AsmDefConfigFile.GetRealAsmDefName).ToArray() ?? Array.Empty<string>();
-            }
-
-            return FixedNamedReferences;
-        }
+        var shouldIgnoreEditorPlatform = IsTestAsmDef || IsILPostProcessorAssembly;
+        IncludePlatforms = ReadPlatformList(shouldIgnoreEditorPlatform, Json["includePlatforms"]);
+        ExcludePlatforms = ReadPlatformList(shouldIgnoreEditorPlatform, Json["excludePlatforms"]);
+        
+        NamedReferences = Json["references"]?.Values<string>().Select(AsmDefConfigFile.GetRealAsmDefName).ToArray() ?? Array.Empty<string>();        
     }
 
     public bool NeedsEntryPointAdded()
@@ -58,40 +61,51 @@ public class AsmDefDescription
         return !DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") && References.All(r => r.NeedsEntryPointAdded());
     }
 
-    public AsmDefDescription[] References =>
-        NamedReferences.Select(AsmDefConfigFile.AsmDefDescriptionFor)
-            .Where(d => d != null && IsSupported(d.Name))
-            .ToArray();
+    public AsmDefDescription[] References => NamedReferences.Select(AsmDefConfigFile.AsmDefDescriptionFor)
+                                                            .Where(d => d != null && IsSupported(d.Name))
+                                                            .ToArray();
 
     public NPath Directory => Path.Parent;
     public bool IsTinyRoot { get; set; }
+
+    public readonly string Name;
+    public readonly List<AsmRefDescription> IncludedAsmRefs;
+    public readonly string[] NamedReferences;
+
+    public readonly bool IsTestAsmDef;
+
+    public readonly Platform[] IncludePlatforms;
+    public readonly Platform[] ExcludePlatforms;
     
-    public Platform[] IncludePlatforms => ReadPlatformList(Json["includePlatforms"]);
-    public Platform[] ExcludePlatforms => ReadPlatformList(Json["excludePlatforms"]);
-    public bool AllowUnsafeCode => Json["allowUnsafeCode"]?.Value<bool>() == true;
+    public readonly bool AllowUnsafeCode;
+    public readonly bool IsILPostProcessorAssembly;
 
-    public string[] DefineConstraints => Json["defineConstraints"]?.Values<string>().ToArray() ?? Array.Empty<string>();
-    public string[] PositiveDefineConstraints => DefineConstraints.Where(s => !s.StartsWith("!")).ToArray();
-    public string[] NegativeDefineConstraints => DefineConstraints.Where(s => s.StartsWith("!")).Select(s => s.Substring(1)).ToArray();
+    public readonly string[] DefineConstraints;
+    public readonly string[] OptionalUnityReferences;
+    public readonly string[] PrecompiledReferences;
 
-    public string[] OptionalUnityReferences => Json["optionalUnityReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
-
-    public bool IncludeTestAssemblies => OptionalUnityReferences.Contains("TestAssemblies");
+    public readonly bool AutoReferenced;
+    public readonly bool NoEngineReferences;
+    public readonly bool OverrideReferences;
     
-    public bool AutoReferenced => Json["autoReferenced"]?.Value<bool>() == true;
-    public bool NoEngineReferences => Json["noEngineReferences"]?.Value<bool>() == true;
-    public bool OverrideReferences => Json["overrideReferences"]?.Value<bool>() == true;
-    public string[] PrecompiledReferences => Json["precompiledReferences"]?.Values<string>()?.ToArray() ?? Array.Empty<string>();
-
-    private static Platform[] ReadPlatformList(JToken platformList)
+    private static Platform[] ReadPlatformList(bool shouldIgnoreEditorPlatform, JToken platformList)
     {
         if (platformList == null)
             return Array.Empty<Platform>();
 
-        return platformList.Select(token => PlatformFromAsmDefPlatformName(token.ToString())).Where(p => p != null).ToArray();
+        return platformList.Select(token => PlatformFromAsmDefPlatformName(shouldIgnoreEditorPlatform, token.ToString())).Where(p => p != null).ToArray();
+    }
+    
+    public class EditorPlatform : Platform
+    {
+        public EditorPlatform() { }
+
+        public override bool HasPosix => false;
+        public override string Name => "Editor";
+        public override string DisplayName => "Editor";
     }
 
-    private static Platform PlatformFromAsmDefPlatformName(string name)
+    private static Platform PlatformFromAsmDefPlatformName(bool shouldIgnoreEditorPlatform, string name)
     {
         switch(name)
         {
@@ -101,7 +115,10 @@ public class AsmDefDescription
             case "WindowsStandalone64":
                 return new WindowsPlatform();
             case "Editor":
-                return null;
+                if (shouldIgnoreEditorPlatform)
+                    return null;
+                else
+                    return new EditorPlatform();
             default:
             {
                 var typeName = $"{name}Platform";

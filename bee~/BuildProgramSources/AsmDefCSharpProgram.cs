@@ -1,8 +1,11 @@
 using System;
 using System.Linq;
+using System.Net;
 using Bee.DotNet;
+using Bee.Toolchain.Extension;
 using NiceIO;
 using Unity.BuildSystem.CSharpSupport;
+using Unity.BuildSystem.NativeProgramSupport;
 
 public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 {
@@ -23,13 +26,12 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
         AsmDefDescription = asmDefDescription;
 
         var asmDefReferences = AsmDefDescription.References.Select(asmDefDescription1 => BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(asmDefDescription1)).ToList();
-        var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") ||
-                    asmDefDescription.Name.EndsWith(".Tests");
+        var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") || asmDefDescription.Name.EndsWith(".Tests");
 
         Construct(asmDefDescription.Name, isExe);
 
         ProjectFile.AdditionalFiles.Add(asmDefDescription.Path);
-
+        
         IncludePlatforms = AsmDefDescription.IncludePlatforms;
         ExcludePlatforms = AsmDefDescription.ExcludePlatforms;
         Unsafe = AsmDefDescription.AllowUnsafeCode;
@@ -73,7 +75,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 
             // Setup for dotnet
             References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework != TargetFramework.Tiny, BuildProgram.NUnitFramework);
-            ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");                                            
+            ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");
             References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework != TargetFramework.Tiny, BuildProgram.NUnitLite);
 
             // General setup
@@ -93,10 +95,9 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     {
         //UNITY_DOTS_ENTRYPOINT is actually a fake define constraint we use to signal the buildsystem,
         // so don't impose it as a constraint
-        var validPositiveConstraintsOrEntryPoint = AsmDefDescription.PositiveDefineConstraints.All(dc => Defines.For(config).Contains(dc) || dc == "UNITY_DOTS_ENTRYPOINT");
-        var validNegativeConstraints = !AsmDefDescription.NegativeDefineConstraints.Any(dc => Defines.For(config).Contains(dc));
 
-        return base.IsSupportedFor(config) && validPositiveConstraintsOrEntryPoint && validNegativeConstraints;
+        return DefineConstraintsHelper.IsDefineConstraintsCompatible(Defines.For(config).Append("UNITY_DOTS_ENTRYPOINT").ToArray(), AsmDefDescription.DefineConstraints)
+            && base.IsSupportedFor(config);
     }
 
     protected override TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
@@ -129,6 +130,6 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
             ? AsmDefDescription.Path.Parent.Combine(AsmDefDescription.Name + ".gen.csproj")
             : base.DeterminePathForProjectFile();
 
-    public bool IsTestAssembly => AsmDefDescription.OptionalUnityReferences.Contains("TestAssemblies");
+    public bool IsTestAssembly => AsmDefDescription.Name.Contains(".Tests");
     public bool IsILPostProcessorAssembly => AsmDefDescription.Name.EndsWith(".CodeGen");
 }

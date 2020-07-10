@@ -5,7 +5,7 @@
 // the editor initiating a connection to us automatically in development builds.
 //
 // However, in web builds, since there is
-// a) no UDP in WebSockets and 
+// a) no UDP in WebSockets and
 // b) no listening for WebSockets connections therefore no auto-connection from the Editor
 // we disable multicasting.
 //
@@ -21,6 +21,7 @@
 using System;
 using System.Runtime.InteropServices;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs;
 using static Unity.Baselib.LowLevel.Binding;
 using static System.Text.Encoding;
 
@@ -40,6 +41,7 @@ namespace Unity.Development.PlayerConnection
         private static string m_broadcastIp = "225.0.0.222";  // local network multicast address that unity editor will observe for multicast messages
         private static ushort m_broadcastPort = (ushort)EditorPorts.Multicast;
         private static int m_broadcastCountdown = 0;
+        private static bool m_WebBroadcastInitialized = false;
         private static bool m_initialized = false;
         private static string m_whoAmI;
         private static byte[] m_whoAmIBytes;
@@ -133,8 +135,17 @@ namespace Unity.Development.PlayerConnection
             m_whoAmIBytes = UTF8.GetBytes(m_whoAmI);
         }
 
+        public static void Initialize(bool directConnect, ushort listenPort)
+        {
+            Initialize(directConnect, listenPort, 0, "DOTS_Runtime_Game");
+            m_WebBroadcastInitialized = true;
+        }
+
         public static void Initialize(bool directConnect, ushort listenPort, uint editorGuid32, string gameName)
         {
+            if (m_WebBroadcastInitialized)
+                Shutdown();
+
             if (m_initialized)
                 return;
 
@@ -179,8 +190,10 @@ namespace Unity.Development.PlayerConnection
 
             m_errState.code = Baselib_ErrorCode.Success;
             m_initialized = false;
+            m_WebBroadcastInitialized = false;
         }
 
+        [MonoPInvokeCallback]
         public static void Broadcast()
         {
             if (!m_initialized)

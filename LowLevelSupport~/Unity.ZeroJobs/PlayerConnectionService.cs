@@ -211,7 +211,7 @@ namespace Unity.Development.PlayerConnection
             Invalid,
         }
 
-        private class MessageCallback
+        internal class MessageCallback
         {
             public UnityGuid messageId;
             public event UnityAction<UnityEngine.Networking.PlayerConnection.MessageEventArgs> callbacks;
@@ -228,7 +228,7 @@ namespace Unity.Development.PlayerConnection
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct MessageHeader
+        internal struct MessageHeader
         {
             public uint magicId;
             public UnityGuid messageId;
@@ -387,6 +387,13 @@ namespace Unity.Development.PlayerConnection
         {
 #if ENABLE_MULTICAST
             Multicast.Initialize(initType == ConnectionState.ConnectDirect, initPort, editorGuid32, gameName);
+#endif
+        }
+
+        public static void InitializeMulticast()
+        {
+#if ENABLE_MULTICAST
+            Multicast.Initialize(initType == ConnectionState.ConnectDirect, initPort);
 #endif
         }
 
@@ -591,7 +598,6 @@ namespace Unity.Development.PlayerConnection
             receiveStream.RecycleStreamAndFreeExtra();
         }
 
-        [MonoPInvokeCallback]
         public static void TransmitAndReceive()
         {
 #if ENABLE_MULTICAST
@@ -638,6 +644,21 @@ namespace Unity.Development.PlayerConnection
             }
 
 #if ENABLE_PROFILER
+            // While the profiler is generally lock-free, this ensures no new threads or markers are initialized and used
+            // after sending the session stream (which contains the identification for new threads and markers)
+            // but just before sending the related stream using this new thread or marker. The timing is pretty specific
+            // but does happen - especially with threads unsynchronized from the main thread - such as the render thread.
+            //
+            // This will not have any performance implications once a marker or thread is intialized so typically we'll
+            // stall for a couple microseconds on, say, the first frame or two and then no longer have contention.
+            Profiler.PlayerConnectionMt_LockProfilerHashTables();
+
+            ProfilerProtocolSession.SendNewMarkersAndThreads();
+            ProfilerProtocolSession.SendProfilerStats();
+
+            // Calculated per frame
+            ProfilerStats.GatheredStats = ProfilerModes.ProfileDisabled;
+
             unsafe
             {
                 // It's ugly here, but this needs to be before other profiler data that is sent - so we do it manually
@@ -646,6 +667,9 @@ namespace Unity.Development.PlayerConnection
             }
 #endif
             MessageStreamManager.TrySubmitAll();
+#if ENABLE_PROFILER
+            Profiler.PlayerConnectionMt_UnlockProfilerHashTables();
+#endif
             Receive();
 
             if (!Connected)
@@ -818,7 +842,7 @@ namespace Unity.Development.PlayerConnection
             m_EventMessageList.Clear();
         }
 
-        private static MessageCallback GetMessageEvent(UnityGuid messageId)
+        internal static MessageCallback GetMessageEvent(UnityGuid messageId)
         {
             foreach (var e in m_EventMessageList)
             {

@@ -4,17 +4,17 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Unity.Build;
-using Unity.Entities.Runtime.Hashing;
 using UnityEditor;
 using Object = UnityEngine.Object;
 
 namespace Unity.Entities.Runtime.Build
 {
+    //TODO internal class to remove when deprecating DotsRuntimeBuildPipeline (old way of exporting scenes in tiny)
     internal class TinyExportDriver : GameObjectConversionSettings
     {
         class Item
         {
-            public Guid Guid;
+            public Hash128 Guid;
             public string AssetPath;
             public FileInfo ExportFileInfo;
             public bool Exported;
@@ -41,18 +41,18 @@ namespace Unity.Entities.Runtime.Build
 
 #endif
 
-        public override Guid GetGuidForAssetExport(Object asset)
+        public override Hash128 GetGuidForAssetExport(Object asset)
         {
             if (!m_Items.TryGetValue(asset, out var found))
             {
                 var assetPath = AssetDatabase.GetAssetPath(asset);
                 var guid = GetGuidForUnityObject(asset);
-                if (guid.Equals(Guid.Empty))
+                if (!guid.IsValid)
                 {
-                    return Guid.Empty;
+                    return new Hash128();
                 }
 
-                var exportFileInfo = m_ExportDataRoot.GetFile(guid.ToString("N"));
+                var exportFileInfo = m_ExportDataRoot.GetFile(guid.ToString());
 
                 m_Items.Add(asset, found = new Item
                 {
@@ -86,33 +86,7 @@ namespace Unity.Entities.Runtime.Build
         public void Write(BuildManifest manifest)
         {
             foreach (var thing in m_Items.Values.Where(i => i.Exported))
-                manifest.Add(thing.Guid, thing.AssetPath, EnumerableExtensions.ToSingleEnumerable<FileInfo>(thing.ExportFileInfo));
-        }
-
-        internal static Guid GetGuidForUnityObject(Object obj)
-        {
-            if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(obj, out var guid, out long fileId))
-            {
-                return Guid.Empty;
-            }
-
-            if (String.IsNullOrEmpty(guid) || guid == "00000000000000000000000000000000")
-            {
-                // Special case for memory textures
-                if (obj is UnityEngine.Texture texture)
-                {
-                    return new Guid(texture.imageContentsHash.ToString());
-                }
-
-                UnityEngine.Debug.LogWarning($"Could not get {nameof(Guid)} for object type '{obj.GetType().FullName}'.");
-                return Guid.Empty;
-            }
-
-            // Merge asset database guid and file identifier
-            var bytes = new byte[guid.Length + sizeof(long)];
-            Encoding.ASCII.GetBytes(guid).CopyTo(bytes, 0);
-            BitConverter.GetBytes(fileId).CopyTo(bytes, guid.Length);
-            return GuidUtility.NewGuid(bytes);
+                manifest.Add(new Guid(thing.Guid.ToString()), thing.AssetPath, EnumerableExtensions.ToSingleEnumerable<FileInfo>(thing.ExportFileInfo));
         }
     }
 }

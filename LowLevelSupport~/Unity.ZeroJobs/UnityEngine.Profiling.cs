@@ -7,25 +7,21 @@ using Unity.Development.Profiling;
 
 namespace UnityEngine.Profiling
 {
-    public class CustomSampler
-    {
-        public static CustomSampler Create(string s) => throw new NotImplementedException();
-        public void Begin() => throw new NotImplementedException();
-        public void End() => throw new NotImplementedException();
-    }
-
     public static class Profiler
     {
+        //[Obsolete("UnityEngine.Profiling.Profiler is obsolete and much slower than the ProfilerMarker API. Please use Unity.Profiling.ProfilerMarker instead.", false)]
         public static unsafe void BeginSample(string s)
         {
 #if ENABLE_PROFILER
-            // Just gets the marker if it already exists
+            // Just gets the marker if it already exists - this is much slower than using ProfilerMarker objects though
+            // because they just store the marker internally for reuse (avoiding a lot of potential string comparisons)
             IntPtr marker = ProfilerUnsafeUtility.CreateMarker(s, ProfilerUnsafeUtility.InternalCategoryInternal, MarkerFlags.Default, 0);
             ProfilerUnsafeUtility.BeginSample(marker);
             ProfilerProtocolThread.Stream.markerStack.PushMarker(marker);
 #endif
         }
 
+        //[Obsolete("UnityEngine.Profiling.Profiler is obsolete and much slower than the ProfilerMarker API. Please use Unity.Profiling.ProfilerMarker instead.", false)]
         public static unsafe void EndSample()
         {
 #if ENABLE_PROFILER

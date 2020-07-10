@@ -24,7 +24,7 @@ namespace Unity.Entities.Runtime.Build
 
         public override BuildStepCollection BuildSteps { get; } = new[]
         {
-            typeof(BuildStepExportEntities2),
+            typeof(BuildStepExportScenes),
             typeof(BuildStepExportConfiguration2),
             typeof(BuildStepGenerateBeeFiles),
             typeof(BuildStepRunBee)

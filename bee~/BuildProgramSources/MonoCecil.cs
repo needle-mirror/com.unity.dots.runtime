@@ -12,7 +12,7 @@ static class MonoCecil
         var packageCachePath = AsmDefConfigFile.UnityProjectPath.Combine("Library", "PackageCache");
         var cecilPaths = packageCachePath.Directories("nuget.mono-cecil@*");
         if (cecilPaths == null || cecilPaths.Length == 0)
-            throw new Exception("DOTS Runtime requires a package reference to 'nuget.mono-cecil' in the project's 'manifest.json' file.");
+            throw new Exception("DOTS Runtime requires a package reference to 'com.unity.nuget.mono-cecil' in the project's 'manifest.json' file.");
 
         // Just a path search. The user should really only have one version lingering here, and a path search should handle most cases
         // However, versions can get wacky, so we may need a more intelligent version string sort in the future.

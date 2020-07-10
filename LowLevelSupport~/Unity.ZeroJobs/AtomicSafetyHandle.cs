@@ -5,7 +5,6 @@ using System;
 using System.Runtime.CompilerServices;
 using Unity.Jobs;
 using Unity.Jobs.LowLevel.Unsafe;
-using Unity.Development.JobsDebugger;
 using Unity.Core;
 using UnityEngine.Assertions;
 using Unity.Burst;
@@ -392,18 +391,24 @@ namespace Unity.Collections.LowLevel.Unsafe
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static unsafe void ReleasePatched(ref AtomicSafetyHandle handle)
         {
-            // In single threaded jobs:
+            // JOB STRUCT
+            // In single threaded build target jobs:
             //   We release the safety handle during post schedule with unpatched safety handles in the job struct.
             //   This is due to execute happening during schedule and still wanting dependency validation to function
             //   identically between MT and ST builds
-            // In multi threaded jobs:
-            //   We release the safety handle after execute with patched safety handles in the job struct.
+            // In multi threaded build target jobs:
+            //   Bursted parallel:
+            //     We release the safety handle after execute with unpatched safety handles in the job struct because
+            //     they were patched after marshalling
+            //   Not bursted or non-parallel:
+            //     We release the safety handle after execute with patched safety handles in the job struct.
+            //
+            // JOB PRODUCER
             // In both:
             //   We release the safety handle after execute with patched safety handles in the job producer.
-#if UNITY_SINGLETHREADED_JOBS
+
             if (handle.nodeLocalPtr != null)
-#endif
-            handle.nodePtr = handle.nodeLocalPtr->originalNode;
+                handle.nodePtr = handle.nodeLocalPtr->originalNode;
             Release(handle);
         }
 
@@ -412,17 +417,16 @@ namespace Unity.Collections.LowLevel.Unsafe
         {
             if (IsTempMemoryHandle(handle))
                 throw new InvalidOperationException("Native container or resource allocated with temp memory. Temp memory containers cannot be used when scheduling a job, use TempJob instead.");
+
             if (handle.nodePtr == null)
-            {
-                if (handle.IsDefaultValue())
-                    throw new InvalidOperationException("The native container or resource has not been assigned or constructed. All containers must be valid when scheduling a job.");
-                else
-                    throw new InvalidOperationException("The native container or resource has been deallocated. All containers must be valid when scheduling a job.");
-            }
+                throw new InvalidOperationException("The native container or resource has not been assigned or constructed. All containers must be valid when scheduling a job.");
+            else if (handle.version != (handle.UncheckedGetNodeVersion() & AtomicSafetyNodeVersionMask.ReadWriteDisposeUnprotect))
+                throw new InvalidOperationException("The native container or resource has been deallocated. All containers must be valid when scheduling a job.");
+
             if (IsTempUnsafePtrSliceHandle(handle))
                 throw new InvalidOperationException("The native container or resource can not be used in a job, because it was constructed from an Unsafe Pointer.");
             if (isWrite && handle.UncheckedIsSecondaryVersion() && (handle.nodePtr->flags & AtomicSafetyNodeFlags.AllowSecondaryWriting) == 0)
-                ErrorReporter.ReportError(ErrorReporter.k_ErrorMarkReadOnly, jobNameOffset, 0, handle.staticSafetyId, 0);
+                throw new InvalidOperationException("The native container or resource must be marked [ReadOnly] in the job, because the container itself is marked read only.");
         }
 
 
@@ -479,36 +483,22 @@ namespace Unity.Collections.LowLevel.Unsafe
             return handle.GetWriter();
         }
 
-        public static unsafe string GetReaderName(AtomicSafetyHandle handle, int readerIndex)
-        {
-            if (handle.nodePtr == null)
-                return "(no safety node)";
-            if (readerIndex >= handle.nodePtr->readerCount)
-                return "(invalid reader index)";
-            return new string(JobNames.NameBlobPtr + handle.nodePtr->readers[readerIndex].jobNameOffset);
-        }
+        public static string GetReaderName(AtomicSafetyHandle handle, int readerIndex) => "(GetReaderName not implemented yet)";
 
-        public static unsafe string GetWriterName(AtomicSafetyHandle handle)
-        {
-            if (handle.nodePtr == null)
-                return "(no safety node)";
-
-            return new string(JobNames.NameBlobPtr + handle.nodePtr->writer.jobNameOffset);
-        }
+        public static string GetWriterName(AtomicSafetyHandle handle) => "(GetWriterName not implemented yet)";
 
         public static unsafe int NewStaticSafetyId(byte* ownerTypeNameBytes, int byteCount)
         {
-            return 0;// StaticSafetyIdHashTable.CreateOrGetSafetyId(ownerTypeNameBytes, byteCount);
+            return 0;
         }
 
         public static unsafe int NewStaticSafetyId<T>()
         {
-            return 0;  // ID for unknown object type
+            return 0;
         }
 
         public static void SetStaticSafetyId(ref AtomicSafetyHandle handle, int staticSafetyId)
         {
-            //handle.staticSafetyId = staticSafetyId;
         }
 
         public static unsafe void SetCustomErrorMessage(int staticSafetyId, AtomicSafetyErrorType errorType, byte* messageBytes, int byteCount)
@@ -579,8 +569,8 @@ namespace Unity.Collections.LowLevel.Unsafe
 
             if (res != EnforceJobResult.HandleWasAlreadyDeallocated)
             {
-                handle.nodePtr->version0 |= AtomicSafetyNodeVersionMask.WriteProtect | AtomicSafetyNodeVersionMask.ReadProtect;
-                handle.nodePtr->version1 |= AtomicSafetyNodeVersionMask.WriteProtect | AtomicSafetyNodeVersionMask.ReadProtect;
+                handle.nodePtr->version0 |= AtomicSafetyNodeVersionMask.ReadWriteProtect;
+                handle.nodePtr->version1 |= AtomicSafetyNodeVersionMask.ReadWriteProtect;
             }
 
             return res;
@@ -744,7 +734,6 @@ namespace Unity.Collections.LowLevel.Unsafe
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void CheckWriteAndBumpSecondaryVersion(AtomicSafetyHandle handle)
         {
-            Assert.IsTrue(handle.IsValid());
             Assert.IsFalse(handle.UncheckedIsSecondaryVersion());
 
             if (!handle.IsAllowedToWrite())

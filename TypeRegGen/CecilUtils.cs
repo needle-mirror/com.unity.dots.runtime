@@ -93,7 +93,7 @@ namespace Unity.ZeroPlayer
 
                 // The fully generic-resolved field reference.  This is the reference that's needed
                 // as a Ldfld(a) reference.
-                var genericResolvedFieldType = genericResolver.Resolve(typeField.FieldType);
+                var genericResolvedFieldType = genericResolver.ResolveFieldType(typeField);
 
                 // TODO this is the point at which generic jobs break down.  We have no
                 // visibility into the generic type, so we can't do anything with internal
@@ -109,7 +109,6 @@ namespace Unity.ZeroPlayer
                 if (!shouldYield && !shouldRecurse)
                     continue;
 
-                var genericResolvedField = genericResolver.ResolveFieldType(typeField);
                 var f = genericResolver.Resolve(typeField);
                 fieldPath.Add(f);
 

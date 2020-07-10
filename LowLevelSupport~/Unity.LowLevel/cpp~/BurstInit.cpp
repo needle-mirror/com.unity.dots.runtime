@@ -96,8 +96,6 @@ const void* NativeGetExternalFunctionPointerCallback(const char* name)
         if (moduleIt == moduleNameToPointer.end())
         {
             // Load the library
-            //hax
-            //HMODULE library = SetDllDirectoryA(libraryName.c_str(), 0);
             if (libraryName.size() > 4 && libraryName.substr(libraryName.size()-4, 4) == ".dll")
             {
                 libraryName = libraryName.substr(0, libraryName.size()-4);
@@ -127,7 +125,7 @@ const void* NativeGetExternalFunctionPointerCallback(const char* name)
         return functionPtr;
     }
 
-    printf("Unable to find internal function `%s`", name);
+    printf("Unable to find internal function `%s`", name); 
     return NULL;
 
 }
@@ -140,7 +138,7 @@ extern "C" DLLEXPORT void burst_abort(const char* exceptionName, const char* err
 
 
 typedef const void* (*BurstInitializeCallbackDelegate)(const char* name);
-
+typedef void(*BurstInitializeDelegate)(BurstInitializeCallbackDelegate callback);
 
 //todo: move to platforms repo when platforms gets easier to deal with,
 //and/or this code stabilizes more
@@ -148,12 +146,21 @@ typedef const void* (*BurstInitializeCallbackDelegate)(const char* name);
 extern "C" void* Staticburst_initialize(BurstInitializeCallbackDelegate cb);
 #endif
 
-typedef void(*BurstInitializeDelegate)(BurstInitializeCallbackDelegate callback);
-
+#if UNITY_WEBGL
+// Notice this function returns void and not void*
+extern "C" void Staticburst_initialize(BurstInitializeCallbackDelegate cb);
+#endif
 
 void BurstInit_iOS()
 {
 #if UNITY_IOS // avoid linker errors
+    Staticburst_initialize(NativeGetExternalFunctionPointerCallback);
+#endif
+}
+
+void BurstInit_WebGL()
+{
+#if UNITY_WEBGL // avoid linker errors
     Staticburst_initialize(NativeGetExternalFunctionPointerCallback);
 #endif
 }
@@ -201,10 +208,11 @@ void BurstInit_Desktop()
 extern "C" DLLEXPORT void BurstInit()
 {
 #if !ENABLE_UNITY_BURST
-	//burst is disabled on webgl & android
     return;
 #elif UNITY_IOS
     BurstInit_iOS();
+#elif UNITY_WEBGL
+    BurstInit_WebGL();
 #elif UNITY_ANDROID
     BurstInit_Android();
 #else 

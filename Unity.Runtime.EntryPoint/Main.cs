@@ -1,5 +1,5 @@
 using System;
-#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
+#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER
 using Unity.Development.PlayerConnection;
 #endif
 using Unity.Platforms;
@@ -16,9 +16,9 @@ namespace Unity.Tiny.EntryPoint
 #endif
             var unity = UnityInstance.Initialize();
 
-            unity.OnTick = () =>
+            unity.OnTick = (double timestampInSeconds) =>
             {
-                var shouldContinue = unity.Update();
+                var shouldContinue = unity.Update(timestampInSeconds);
                 if (shouldContinue == false)
                 {
                     unity.Deinitialize();
@@ -26,8 +26,9 @@ namespace Unity.Tiny.EntryPoint
                 return shouldContinue;
             };
 
-#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
-            DebuggerAttachDialog.Show(Connection.TransmitAndReceive);
+#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER
+            Connection.InitializeMulticast();
+            DebuggerAttachDialog.Show(Multicast.Broadcast);
 #endif
 
             RunLoop.EnterMainLoop(unity.OnTick);
@@ -50,3 +51,4 @@ namespace Unity.Tiny.EntryPoint
         }
     }
 }
+

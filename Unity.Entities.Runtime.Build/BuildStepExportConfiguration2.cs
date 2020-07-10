@@ -88,7 +88,6 @@ namespace Unity.Entities.Runtime.Build
             var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
             var scenes = context.GetComponentOrDefault<SceneList>();
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
-            var originalActiveScene = SceneManager.GetActiveScene();
 
             s_AssemblyCache.BaseAssemblies = rootAssembly.RootAssembly.asset;
             s_AssemblyCache.PlatformName = profile.Target.UnityPlatformName;
@@ -159,7 +158,7 @@ namespace Unity.Entities.Runtime.Build
                     }
                     catch (Exception e)
                     {
-                        return context.Failure($"Exception thrown during SubScene export: {e}");
+                        return context.Failure($"Exception thrown during configuration scene export: {e}");
                     }
                 }
             }

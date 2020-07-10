@@ -93,6 +93,16 @@ namespace NUnit.Framework
             throw new Exception("Assert.False " + msg);
         }
 
+        public static void AreEqual(byte a, byte b, string msg = "")
+        {
+            if (a == b)
+            {
+                ++assertPassCount;
+                return;
+            }
+            LogExpectedAndThrow("Assert.AreEqual(byte, byte) " + msg, a, b);
+        }
+
         public static void Zero(int value, string msg = "")
         {
             if (value == 0)

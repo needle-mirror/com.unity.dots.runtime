@@ -7,6 +7,7 @@ using Mono.Cecil.Rocks;
 using Unity.Entities.BuildUtils;
 using static Unity.ZeroPlayer.CecilUtils;
 using static Unity.ZeroPlayer.JobCecilUtils;
+using Unity.Cecil.Awesome;
 
 namespace Unity.ZeroPlayer
 {
@@ -116,7 +117,7 @@ namespace Unity.ZeroPlayer
         // IJobForEach re-uses types, and we don't want to multiply patch. This just records work done so it isn't re-done.
         HashSet<string> m_Patched = new HashSet<string>();    // TODO delete
 
-        // We will build a contiguous block of job names which can be referred to in job debugger code
+        // We will build a contiguous block of job names which can be referred to in jd code
         string m_JobNamesBlob = "UNKNOWN_OBJECT_TYPE\0";
 
         public List<JobDesc> JobDescList = new List<JobDesc>();
@@ -218,7 +219,7 @@ namespace Unity.ZeroPlayer
             }
 
             m_DependencyValidatorDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
-                i.FullName == "Unity.Development.JobsDebugger.DependencyValidator");
+                i.FullName == "Unity.Development.DependencyValidator");
             if (m_DependencyValidatorDef != null)
             {
                 m_DependencyValidator_AllocateKnownFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "AllocateKnown");
@@ -246,7 +247,7 @@ namespace Unity.ZeroPlayer
             m_IJobBase_PrepareJobAtExecuteTimeFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_PrepareJobAtExecuteTimeFn);
             m_IJobBase_CleanupJobFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_CleanupJobFn);
             m_IJobBase_IsBurstedFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_IsBursted);
-            m_IJobBase_PatchMinMaxFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_PatchMinMax);
+            m_IJobBase_PatchMinMaxFnDef = m_IJobBaseDef.Methods.FirstOrDefault(m => m.Name == k_PatchMinMax);    // null in release
             m_IJobBase_GetExecuteMethodFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_GetExecuteMethodFn);
             m_IJobBase_GetUnmanagedJobSizeFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_GetUnmanagedJobSizeFn);
             m_IJobBase_GetMarshalToBurstMethodFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_GetMarshalToBurstMethodFn);
@@ -255,7 +256,7 @@ namespace Unity.ZeroPlayer
             FindAllInterestingTypes();
         }
 
-        // Is the safety system enabled?  If it isn't, we won't have a type definition for Jobs Debugger.
+        // Is the safety system enabled?  If it isn't, we won't have a type definition for jd.
         bool SafetySystemEnabled()
         {
             return m_AtomicSafetyHandleDef != null;
@@ -296,7 +297,7 @@ namespace Unity.ZeroPlayer
                         jobDesc.JobProducer = producer;
                         jobDesc.JobProducerDef = producer.Resolve();
                         jobDesc.JobInterface = type;
-                        jobDesc.ProducerNameBlobOffset = AddJobDebuggerString(type.FullName);
+                        jobDesc.ProducerNameBlobOffset = AddJDString(type.FullName);
 
                         TypeReference jobData = executeMethod.Parameters[k_ExecuteJobParam].ParameterType.GetElementType();
 
@@ -780,9 +781,9 @@ namespace Unity.ZeroPlayer
             // jobData.JobData.PatchMinMax_Gen()
             // OR
             // jobData.PatchMinMax_Gen()
-            instrList.Add(Instruction.Create(OpCodes.Ldarg, executeMethod.Parameters[0]));
             if (jobDesc.JobWrapperField != null)
             {
+                instrList.Add(Instruction.Create(OpCodes.Ldarg, executeMethod.Parameters[0]));
                 instrList.Add(Instruction.Create(OpCodes.Ldflda,
                     module.ImportReference(TypeRegGen.MakeGenericFieldSpecialization(jobDesc.JobWrapperField,
                         jobDesc.JobData.GenericParameters.ToArray()))));
@@ -893,13 +894,13 @@ namespace Unity.ZeroPlayer
                 ParameterDefinition jobDataParam = null;
                 VariableDefinition jobDataVar = null;
                 TypeReference jobDataTR = null;
-                VariableDefinition jobsDebuggerInfoVar = null;
+                VariableDefinition jdInfoVar = null;
                 VariableDefinition scheduledJobVar = null;
                 VariableDefinition scheduledJobDependsVar = null;
                 if (SafetySystemEnabled())
                 {
-                    jobsDebuggerInfoVar = new VariableDefinition(module.ImportReference(m_DependencyValidatorDef));
-                    method.Body.Variables.Add(jobsDebuggerInfoVar);
+                    jdInfoVar = new VariableDefinition(module.ImportReference(m_DependencyValidatorDef));
+                    method.Body.Variables.Add(jdInfoVar);
                     scheduledJobVar = new VariableDefinition(module.ImportReference(m_JobHandleDef));
                     method.Body.Variables.Add(scheduledJobVar);
                     scheduledJobDependsVar = new VariableDefinition(module.ImportReference(m_JobHandleDef));
@@ -1048,12 +1049,12 @@ namespace Unity.ZeroPlayer
                         {
                             List<Instruction> preScheduleArgLoads = new List<Instruction>
                             {
-                                Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar),
+                                Instruction.Create(OpCodes.Ldloca, jdInfoVar),
                                 Instruction.Create(OpCodes.Ldloca, scheduledJobDependsVar),
                                 Instruction.Create(OpCodes.Ldnull),
                             };
 
-                            il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar));
+                            il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jdInfoVar));
                             il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Initobj, module.ImportReference(m_DependencyValidatorDef)));
 
                             // Patch the last 2 parameters to call:
@@ -1061,7 +1062,7 @@ namespace Unity.ZeroPlayer
                             // UserJob:     PrepareJobAtPreScheduleTimeFn_Gen
                             // Add new instructions before the call:
                             {
-                                // CustomJobProcess<T>.ProducerPreScheduleFn_Gen(ref data, ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle);    // if there is a job wrapper
+                                // CustomJobProcess<T>.ProducerPreScheduleFn_Gen(ref data, ref jdInfo, ref dependsOn, deferredSafetyHandle);    // if there is a job wrapper
                                 // OR
                                 // insert constant 4   // if there isn't a job wrapper or the call is unsupported.
                                 if (jobDesc.JobWrapperField == null)
@@ -1097,9 +1098,9 @@ namespace Unity.ZeroPlayer
                                 }
                             }
 
-                            // data.UserJobData.PrepareJobAtPreScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle)
+                            // data.UserJobData.PrepareJobAtPreScheduleTimeFn_Gen(ref jdInfo, ref dependsOn, deferredSafetyHandle)
                             // OR
-                            // data.PrepareJobAtPreScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle)
+                            // data.PrepareJobAtPreScheduleTimeFn_Gen(ref jdInfo, ref dependsOn, deferredSafetyHandle)
                             if (deferredArgOps != null)
                             {
                                 preScheduleArgLoads.RemoveAt(preScheduleArgLoads.Count - 1);
@@ -1127,13 +1128,13 @@ namespace Unity.ZeroPlayer
 
                             Instruction[] postScheduleArgLoads = new Instruction[]
                             {
-                                Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar),
+                                Instruction.Create(OpCodes.Ldloca, jdInfoVar),
                                 Instruction.Create(OpCodes.Ldloca, scheduledJobVar),
                             };
 
-                            // data.UserJobData.PrepareJobAtPostScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref newJobHandle)
+                            // data.UserJobData.PrepareJobAtPostScheduleTimeFn_Gen(ref jdInfo, ref newJobHandle)
                             // OR
-                            // data.PrepareJobAtPostScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref newJobHandle)
+                            // data.PrepareJobAtPostScheduleTimeFn_Gen(ref jdInfo, ref newJobHandle)
                             EmitCallJobBaseMethod(module, il, jobDesc, method, nextInstruction, jobDataParam, jobDataVar, postScheduleArgLoads, m_IJobBase_PrepareJobAtPostScheduleTimeFnDef);
                         }
                     }
@@ -1268,12 +1269,14 @@ namespace Unity.ZeroPlayer
                 GenerateProducerCleanupFn(module, jobDesc, producerSafetyFields);
                 // ExecuteFn calls CleanupFn, so generate CleanupFn first.
                 GenerateProducerExecuteFn(module, jobDesc, producerSafetyFields);
-                GenerateProducerPatchMinMaxFn(module, jobDesc, genericJobProducerTypeRef);
+                if (SafetySystemEnabled())
+                    GenerateProducerPatchMinMaxFn(module, jobDesc, genericJobProducerTypeRef);
 
                 PatchProducerExecute(module, jobDesc);
                 PatchJobSchedule(module, jobDesc, producerSafetyFields);
                 PatchCreateJobReflection(module, jobDesc);
-                PatchMinMaxRangeCall(module, jobDesc);
+                if (SafetySystemEnabled())
+                    PatchMinMaxRangeCall(module, jobDesc);
             }
         }
 
@@ -1359,15 +1362,15 @@ namespace Unity.ZeroPlayer
 
                         if (SafetySystemEnabled())
                         {
-                            int nameBlobOffset = AddJobDebuggerString(type.FullName);
+                            int nameBlobOffset = AddJDString(type.FullName);
                             safetyFields = GatherSafetyFields(asm, type);
                             type.Methods.Add(GenPreScheduleMethod(asm, type, safetyFields, nameBlobOffset));
                             type.Methods.Add(GenPostScheduleMethod(asm, type, safetyFields, nameBlobOffset));
+                            type.Methods.Add(GenPatchMinMaxMethod(asm, type));
                         }
                         type.Methods.Add(GenExecuteMethod(asm, type, safetyFields));
                         type.Methods.Add(GenCleanupMethod(asm, type, safetyFields));
                         type.Methods.Add(GenIsBurstedMethod(asm, type));
-                        type.Methods.Add(GenPatchMinMaxMethod(asm, type));
 
                         typesGainedIJobBase.Add(type);
                     }
@@ -1575,7 +1578,9 @@ namespace Unity.ZeroPlayer
 
             foreach (var fieldPath in IterateJobFields(jobTypeDef))
             {
-                var fieldType = fieldPath.Last().FieldType;
+                var field = fieldPath.Last();
+                var resolver = TypeResolver.For(field.DeclaringType);
+                var fieldType = resolver.ResolveFieldType(field);
                 var resolvedFieldType = fieldType.Resolve();
 
                 if (m_TypesSupportingDeferredConvertListToArray.TryGetValue(resolvedFieldType, out var patchMethod))
@@ -1716,7 +1721,7 @@ namespace Unity.ZeroPlayer
         //---------------------------------------------------------------------------------------------------
 
 
-        public int AddJobDebuggerString(string name)
+        public int AddJDString(string name)
         {
             if (!SafetySystemEnabled())
                 return 0;
@@ -1725,36 +1730,6 @@ namespace Unity.ZeroPlayer
             int nameBlobOffset = m_JobNamesBlob.Length;
             m_JobNamesBlob += name + '\0';
             return nameBlobOffset;
-        }
-
-        public void PatchJobDebuggerStringTable()
-        {
-            if (!SafetySystemEnabled())
-                return;
-            TypeDefinition jobNameStorageDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
-                i.FullName == "Unity.Development.JobsDebugger.JobNameStorage");
-            if (jobNameStorageDef != null)
-            {
-                jobNameStorageDef.ClassSize = (m_JobNamesBlob.Length * 2 + 3) & ~3;
-                jobNameStorageDef.PackingSize = 4;
-
-                TypeDefinition jobNamesDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
-                    i.FullName == "Unity.Development.JobsDebugger.JobNames");
-                FieldDefinition nameStorageField = jobNamesDef.Fields.First(m => m.Name == "m_NameStorage");
-
-                byte[] namesBlob = new byte[jobNameStorageDef.ClassSize];
-                unsafe
-                {
-                    fixed (char* namesPtr = m_JobNamesBlob)
-                    {
-                        for (int i = 0; i < jobNameStorageDef.ClassSize; i++)
-                            namesBlob[i] = ((byte*)namesPtr)[i];
-                    }
-                }
-
-                nameStorageField.Attributes |= FieldAttributes.HasFieldRVA;
-                nameStorageField.InitialValue = namesBlob;
-            }
         }
 
         void GenerateProducerPreScheduleFn(ModuleDefinition module, JobDesc jobDesc, TypeReference genericJobProducerTypeRef, SafetyFieldInfo safetyFields, int nameBlobOffset)
@@ -2103,7 +2078,7 @@ namespace Unity.ZeroPlayer
                         readOnly = readOnly,
                         needRelease = needRelease,
                         dynamicSafety = dynamicSafety,
-                        nameBlobOffset = AddJobDebuggerString(nestedName),
+                        nameBlobOffset = AddJDString(nestedName),
                     });
                 }
 

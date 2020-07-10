@@ -12,3 +12,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unity.Tiny.Rendering.Native")]
 [assembly: InternalsVisibleTo("Unity.Tiny.Rendering.Tests")]
 [assembly: InternalsVisibleTo("Unity.ZeroJobs.Tests")]
+[assembly: InternalsVisibleTo("Unity.Networking.Transport")]

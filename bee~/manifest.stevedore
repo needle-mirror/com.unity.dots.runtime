@@ -3,13 +3,13 @@
 # Comments and whitespace can e.g. be used to group by tool (e.g. all roslyn in one group).
 
 # il2cpp
-public: il2cpp/20.06.15_1318eec5fcb52cd423eeaf12ef15af3085c9f4317d6ce01d35e621863241f8d2.7z
+public: il2cpp/20.07.29_a4da0539a769586e399ea15c276c7fce7d6189529c5ee4d151eac6d7f3afa95b.7z
 public: MonoBleedingEdgeSub/acf432a39edc3865d3d97f1825d9576459049f6e_ecafea2afec824fb3f917fcf86ced28099849bc7174252d2929fb02b7e5b1b4b.7z
 
 # node
-public: node-win-x64/10.15.3_18d284ffd5b5e677177cc4525729bb7ae30c7c965af208b78f3d823c9ec712cc.7z
-public: node-mac-x64/10.15.3_b5b0f3716ee570a6ac33affe86f5077d1c966308de1d1f1499b8a4fe0bd32a19.7z
-public: node-linux-x64/10.15.3_6cb4c1d0c3ed0b996f34ac998b2d64ca44cf8a291876d00e05c9568a5d714b5a.7z
+public: node-win-x64/12.18.2_6a1731dad0d398106f413324c0343dd11b535cef737a73817e9465ed1fa30f8c.7z
+public: node-mac-x64/12.18.2_86faf9446e773923f58597609e6d34872350ba272e7c9d42851b2d0040191134.7z
+public: node-linux-x64/12.18.2_5b81d04a5b2c6d79b27f8e137606d45b21cc9e5df588ab492242e6e806533fb1.7z
 
 # roslyn
 public: roslyn-csc-win64/9d34608e19dfe308a46d51aeaa3670746272bff9_7bcbee41a6c94681ce50890758f3a052e09c165fde67e6069d83537ba5697d61.7z
@@ -26,19 +26,19 @@ public: glfw/3.3_72f4d719b9e76e8be646ab0099df09a94ecb8d54778d174e60ca172091b9fae
 public: bgfx-source/2020063000_04d502ac2d9b74a8630d24a66f42a52816b8805bcdb5f0caf59ba852424d2679.7z
 
 # emscripten
-public: emscripten-win/1.39.17-unity_b1a809c90e1cfc73e52cf489761f376457b61f3371449deb0a8de3a273599524.7z
-public: emscripten-mac/1.39.17-unity_7d877feb00685ae65367bfe48eb40457a45254cb843bb946258f86b98a982a26.7z
-public: emscripten-linux/1.39.17-unity_e699538d7bdd81ea545912e59d494a21f62bb3317dcd58f0f7bc9b3b086d955c.7z
+public: emscripten-win/1.39.17.2-unity_76387054d39ba93dd0042b31b9c51eae27862663df5dfc6448c4d05e957c3117.7z
+public: emscripten-mac/1.39.17.2-unity_2bde8531e60d8ce90adb027c8e5be79df7ea1449f21d2c6bcb3a8d897171f3b9.7z
+public: emscripten-linux/1.39.17.2-unity_c7a558d12982d6ebb6ff313203f7a3eb3d37a06a07317712683d026f2a16580e.7z
 
 # emscripten fastcomp LLVM backend (legacy, will be removed in the future)
-public: emscripten-fc-llvm-win/1.39.17-unity_a39fba544b430a052d5a6a50e74c65333ea9b1757e7fb52a6b017c76e8c8e928.7z
-public: emscripten-fc-llvm-mac/1.39.17-unity_8f94f511827f74d0c5048aed70c8528288be2aa79447d28aa9f1f1023b42cfb0.7z
-public: emscripten-fc-llvm-linux/1.39.17-unity_0beb1f325a29c13364fdd2b27c01f262335bc1e7473075f7670e076ed6ec736e.7z
+public: emscripten-fc-llvm-win/1.39.17.2-unity_cab38fd24b6be1ec0547b925c32ef5e7f63d0aa068a692578f9818847a151d02.7z
+public: emscripten-fc-llvm-mac/1.39.17.2-unity_df0202205222076a0d4f054edad578d454bcc3af95f7269e077b5947568a8235.7z
+public: emscripten-fc-llvm-linux/1.39.17.2-unity_d55a1a5e8d51d9c51153137cfbda6b7e98427bd1b695c6e467f74b1dcf6b8a8d.7z
 
 # emscripten upstream wasm LLVM backend
-public: emscripten-wasm-llvm-win/1.39.17-unity_846dfc8bbe4fd63107deb122ab26e8fb722d4d9cb4ac14f20c07f174dc5ba0b5.7z
-public: emscripten-wasm-llvm-mac/1.39.17-unity_17e2527c453323e79b203f188e190b293fb5fb965145c17aa7de792c93f1173f.7z
-public: emscripten-wasm-llvm-linux/1.39.17-unity_a600a9294e88ce956d757b3954ea9975dacfdbe082c58cad5ee053c616f00058.7z
+public: emscripten-wasm-llvm-win/1.39.17.2-unity_ef40f5fe6d836b0a91e5aa03af321bededd2a98e7973044ddc05dbd57b6b1a5b.7z
+public: emscripten-wasm-llvm-mac/1.39.17.2-unity_eeb4af568ce2c013281e7d47ab14049bfb6a01de4fd73a1fc182cf024034e7b4.7z
+public: emscripten-wasm-llvm-linux/1.39.17.2-unity_21e10b39ac7ee90796fdf1ca7077d0fc7d241a64656ed9c71c4e5615545b0915.7z
 
 # http server
 public: http-server/0.12.3_0ecc281c6d4d7a07d360a65bf840a2d3e27d88ad78b9c092a47ccdc7aa2713b9.7z
