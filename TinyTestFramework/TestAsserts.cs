@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Runtime.InteropServices;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Entities;
 
@@ -92,6 +93,138 @@ namespace NUnit.Framework
             throw new Exception("Assert.False " + msg);
         }
 
+        public static void Zero(int value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void Zero(uint value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void Zero(long value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void Zero(ulong value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void Zero(float value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void Zero(double value, string msg = "")
+        {
+            if (value == 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.Zero " + msg);
+            throw new Exception("Assert.Zero " + msg);
+        }
+
+        public static void NotZero(int value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
+        public static void NotZero(uint value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
+        public static void NotZero(long value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
+        public static void NotZero(ulong value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
+        public static void NotZero(float value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
+        public static void NotZero(double value, string msg = "")
+        {
+            if (value != 0)
+            {
+                ++assertPassCount;
+                return;
+            }
+            Console.WriteLine("Assert.NotZero " + msg);
+            throw new Exception("Assert.NotZero " + msg);
+        }
+
         public static void AreEqual(int a, int b, string msg = "")
         {
             if (a == b)
@@ -123,23 +256,63 @@ namespace NUnit.Framework
             LogExpectedAndThrow("Assert.AreNotEqual(int, int) " + msg, a, b);
         }
 
-        public static void AreEqual(float a, float b, string msg = "")
+        public static void AreEqual(float a, float b, float err, string msg = "")
         {
-            if (a == b)
+            // Clearly the infinity behavior not equal in any mathematical sense, but expected by the tests:
+            if ((a == float.PositiveInfinity && b == float.PositiveInfinity) ||
+                (a == float.NegativeInfinity && b == float.NegativeInfinity) ||
+                (float.IsNaN(a) && float.IsNaN(b)) ||
+                (Math.Abs(a - b) <= err))
             {
                 ++assertPassCount;
                 return;
             }
+
             LogExpectedAndThrow("Assert.AreEqual(float, float) " + msg, a, b);
         }
 
-        public static void AreEqual(double a, double b, float err, string msg = "")
+        public static void AreEqual(float a, float b, string msg = "")
         {
-            if (Math.Abs(a - b) <= err)
+            // Clearly the infinity behavior not equal in any mathematical sense, but expected by the tests:
+            if ((a == float.PositiveInfinity && b == float.PositiveInfinity) ||
+                (a == float.NegativeInfinity && b == float.NegativeInfinity) ||
+                (float.IsNaN(a) && float.IsNaN(b)) ||
+                (a == b))
             {
                 ++assertPassCount;
                 return;
             }
+
+            LogExpectedAndThrow("Assert.AreEqual(float, float) " + msg, a, b);
+        }
+
+        public static void AreEqual(double a, double b, double err, string msg = "")
+        {
+            // Clearly the infinity behavior not equal in any mathematical sense, but expected by the tests:
+            if ((a == double.PositiveInfinity && b == double.PositiveInfinity) ||
+                (a == double.NegativeInfinity && b == double.NegativeInfinity) ||
+                (double.IsNaN(a) && double.IsNaN(b)) ||
+                (Math.Abs(a - b) <= err))
+            {
+                ++assertPassCount;
+                return;
+            }
+
+            LogExpectedAndThrow("Assert.AreEqual(double, double) " + msg, a, b);
+        }
+
+        public static void AreEqual(double a, double b, string msg = "")
+        {
+            // Clearly the infinity behavior not equal in any mathematical sense, but expected by the tests:
+            if ((a == double.PositiveInfinity && b == double.PositiveInfinity) ||
+                (a == double.NegativeInfinity && b == double.NegativeInfinity) ||
+                (double.IsNaN(a) && double.IsNaN(b)) ||
+                (a == b))
+            {
+                ++assertPassCount;
+                return;
+            }
+
             LogExpectedAndThrow("Assert.AreEqual(double, double) " + msg, a, b);
         }
 
@@ -235,7 +408,17 @@ namespace NUnit.Framework
                 ++assertPassCount;
                 return;
             }
-            LogAndThrow("Assert.LessOrEqual " + msg, a, b);
+            LogAndThrow("Assert.LessOrEqual(int, int) " + msg, a, b);
+        }
+
+        public static void LessOrEqual(double a, double b, string msg = "")
+        {
+            if (a <= b)
+            {
+                ++assertPassCount;
+                return;
+            }
+            LogAndThrow("Assert.LessOrEqual(double, double) " + msg, a, b);
         }
 
         public static void Less(int a, int b, string msg = "")
@@ -245,8 +428,19 @@ namespace NUnit.Framework
                 ++assertPassCount;
                 return;
             }
-            LogAndThrow("Assert.Less " + msg, a, b);
+            LogAndThrow("Assert.Less(int, int) " + msg, a, b);
         }
+
+        public static void Less(double a, double b, string msg = "")
+        {
+            if (a < b)
+            {
+                ++assertPassCount;
+                return;
+            }
+            LogAndThrow("Assert.Less(double, double) " + msg, a, b);
+        }
+
 
         public static void Greater(int a, int b, string msg = "")
         {
@@ -256,6 +450,16 @@ namespace NUnit.Framework
                 return;
             }
             LogAndThrow("Assert.Greater(int, int) " + msg, a, b);
+        }
+
+        public static void Greater(double a, double b, string msg = "")
+        {
+            if (a > b)
+            {
+                ++assertPassCount;
+                return;
+            }
+            LogAndThrow("Assert.Greater(double, double) " + msg, a, b);
         }
 
         public static void Greater(ulong a, ulong b, string msg = "")
@@ -276,6 +480,16 @@ namespace NUnit.Framework
                 return;
             }
             LogAndThrow("Assert.GreaterOrEqual(int, int) " + msg, a, b);
+        }
+
+        public static void GreaterOrEqual(double a, double b, string msg = "")
+        {
+            if (a >= b)
+            {
+                ++assertPassCount;
+                return;
+            }
+            LogAndThrow("Assert.GreaterOrEqual(double, double) " + msg, a, b);
         }
 
         [PartiallySupported("Assert.AreEqual(Entity[] a, Entity[] b are not validated")]
@@ -346,26 +560,31 @@ namespace NUnit.Framework
             // We...ignore it.
         }
 
-        public static void IsNull<T>(T t)
+        public static void IsNull<T>(T t, string msg = "")
         {
             if (t == null)
             {
                 ++assertPassCount;
                 return;
             }
-            Console.WriteLine("Assert.IsNull()");
-            throw new Exception("Assert.IsNull()");
+            Console.WriteLine("Assert.IsNull() " + msg);
+            throw new Exception("Assert.IsNull() " + msg);
         }
 
-        public static void NotNull<T>(T t)
+        public static void NotNull<T>(T t, string msg = "")
         {
             if (t != null)
             {
                 ++assertPassCount;
                 return;
             }
-            Console.WriteLine("Assert.NotNull()");
-            throw new Exception("Assert.NotNull()");
+            Console.WriteLine("Assert.NotNull() " + msg);
+            throw new Exception("Assert.NotNull() " + msg);
+        }
+
+        public static void IsNotNull<T>(T t, string msg = "")
+        {
+            NotNull(t, msg);
         }
 
         // This is a very simple & partial usage of That

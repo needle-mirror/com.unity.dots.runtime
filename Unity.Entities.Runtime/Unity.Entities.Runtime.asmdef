@@ -3,7 +3,7 @@
     "references": [
         "Unity.Entities",
         "Unity.Collections",
-        "Unity.Tiny.Codec"
+        "Unity.Mathematics"
     ],
     "optionalUnityReferences": [],
     "includePlatforms": [],

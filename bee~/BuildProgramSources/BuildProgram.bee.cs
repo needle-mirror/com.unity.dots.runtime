@@ -19,6 +19,7 @@ using Bee.Toolchain.Extension;
 using Bee.Toolchain.VisualStudio;
 using Newtonsoft.Json.Linq;
 using Unity.BuildTools;
+using System.IO;
 
 public class BuildProgram
 {
@@ -26,16 +27,17 @@ public class BuildProgram
     public static NPath LowLevelRoot => BeeRoot.Parent.Combine("LowLevelSupport~");
     public static DotsRuntimeCSharpProgram UnityTinyBurst { get; set; }
     public static DotsRuntimeCSharpProgram UnityLowLevel { get; set; }
+    public static DotsRuntimeCSharpProgram TinyIO { get; set; }
     public static DotsRuntimeCSharpProgram ZeroJobs { get; set; }
     public static DotNetAssembly UnityCompilationPipeline { get; set; }
     public static DotNetAssembly NUnitFramework { get; set; }
     public static DotNetAssembly NUnitLite { get; set; }
     public static DotNetAssembly[] ILPostProcessorAssemblies { get; private set; }
-    
+
     /*
      * HACK for right (03/25/2020) now until fixed sdk project files arrive from @andrews:
      * pretend to compile against netfw instead of netstandard if projectfiles are requested, because
-     * otherwise bee will generate sdk style project files, which are broken with tiny. 
+     * otherwise bee will generate sdk style project files, which are broken with tiny.
      */
     public static Framework HackedFrameworkToUseForProjectFilesIfNecessary => IsRequestedTargetExactlyProjectFiles()
         ? (Framework) Framework.Framework461
@@ -44,7 +46,7 @@ public class BuildProgram
     public static Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>> PerConfigBuildSettings { get; set; } =
         new Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>>();
     public static VisualStudioSolution VisualStudioSolution { get; private set; }
-    
+
     public static NPath BeeRoot
     {
         get {
@@ -58,15 +60,20 @@ public class BuildProgram
     {
         /* This is disabled for now (11/12/2019) because we have a theory that because there will be very few
          * bee targets overall, we don't need to optimize project files as much as we used to.
-         * But we should re-enable this check if we see project files taking too long to generate. 
+         * But we should re-enable this check if we see project files taking too long to generate.
          */
         /*if (IsRequestedTargetExactlyProjectFiles())
             return true;*/
-        
-        if (!IsRequestedTargetExactlySingleAppSingleConfig()) 
+
+        if (!IsRequestedTargetExactlySingleAppSingleConfig())
             return false;
 
-        return config.Identifier != StandaloneBeeDriver.GetCommandLineTargets().Single();
+        //If there is complementary target its config identifier is generated from main target identifier by adding slash symbol
+        //and complementary target name. So only part before slash should be compared with target from command line.
+        //See comment in DotsConfigs.cs, DotsConfigs.MakeConfigs() method for details
+        var slash = config.Identifier.IndexOf('/');
+        var identifier = slash == -1 ? config.Identifier : config.Identifier.Substring(0, slash);
+        return identifier != StandaloneBeeDriver.GetCommandLineTargets().Single();
     }
 
     public static bool IsRequestedTargetExactlyProjectFiles()
@@ -77,7 +84,7 @@ public class BuildProgram
 
         return commandLineTargets.Single() == "ProjectFiles";
     }
-    
+
     private static bool IsRequestedTargetExactlySingleAppSingleConfig()
     {
         var commandLineTargets = StandaloneBeeDriver.GetCommandLineTargets();
@@ -96,9 +103,9 @@ public class BuildProgram
             StandaloneBeeDriver.RunBuildProgramInBeeEnvironment("dummy.json", Main);
             return;
         }
-        
-        BeeRootValue = AsmDefConfigFile.AsmDefDescriptionFor("Unity.ZeroPlayer.TypeRegGen").Path.Parent.Parent.Combine("bee~");
-        
+
+        BeeRootValue = AsmDefConfigFile.AsmDefDescriptionFor("Unity.Runtime.EntryPoint").Path.Parent.Parent.Combine("bee~");
+
         StevedoreGlobalSettings.Instance = new StevedoreGlobalSettings
         {
             // Manifest entries always override artifact IDs hard-coded in Bee
@@ -113,7 +120,7 @@ public class BuildProgram
 
         //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
         CSharpProgram.DefaultConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release, DownloadableCsc.Csc72);
-        
+
         PerConfigBuildSettings = DotsConfigs.MakeConfigs();
         foreach (var rootAssemblyName in PerConfigBuildSettings.Keys)
         {
@@ -123,6 +130,7 @@ public class BuildProgram
         //any asmdef that sits next to a .project file we will consider a tiny game.
         var asmDefDescriptions = AsmDefConfigFile.AssemblyDefinitions.ToArray();
         var burstAsmDef = asmDefDescriptions.First(d => d.Name == "Unity.Burst");
+        var tinyIOAsmDef = asmDefDescriptions.First(d => d.Name == "Unity.Tiny.IO");
 
         UnityLowLevel = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.LowLevel")
         {
@@ -132,6 +140,8 @@ public class BuildProgram
         UnityLowLevel.NativeProgram.Libraries.Add(IsLinux, new SystemLibrary("dl"));
         UnityLowLevel.NativeProgram.Libraries.Add(c => c.Platform is AndroidPlatform, new SystemLibrary("log"));
 
+        TinyIO = GetOrMakeDotsRuntimeCSharpProgramFor(tinyIOAsmDef);
+
         UnityTinyBurst = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.Tiny.Burst")
         {
             References = { UnityLowLevel },
@@ -140,14 +150,13 @@ public class BuildProgram
 
         ZeroJobs = new DotsRuntimeCSharpProgram($"{LowLevelRoot}/Unity.ZeroJobs")
         {
-            References = { UnityLowLevel, UnityTinyBurst, GetOrMakeDotsRuntimeCSharpProgramFor(burstAsmDef) },
+            References = { UnityLowLevel, UnityTinyBurst, GetOrMakeDotsRuntimeCSharpProgramFor(burstAsmDef), TinyIO },
             Unsafe = true
         };
-        
+
         UnityCompilationPipeline = new DotNetAssembly(
             AsmDefConfigFile.UnityCompilationPipelineAssemblyPath,
             HackedFrameworkToUseForProjectFilesIfNecessary);
-
 
         var nunit = new StevedoreArtifact("nunit-framework");
         Backend.Current.Register(nunit);
@@ -222,7 +231,7 @@ public class BuildProgram
         {
             //we want dotnet to be the default, and we cannot have nice things: https://aras-p.info/blog/2017/03/23/How-does-Visual-Studio-pick-default-config/platform/
             var solutionConfigName = config.Identifier == "dotnet" ? "Debug (dotnet)": config.Identifier;
-            
+
             vs.Configurations.Add(new SolutionConfiguration(solutionConfigName, (configurations, file) =>
             {
                 var firstOrDefault = configurations.FirstOrDefault(c => c == config);
@@ -241,6 +250,8 @@ public class BuildProgram
 
         if (!IsRequestedTargetExactlySingleAppSingleConfig())
             Backend.Current.AddAliasDependency("ProjectFiles", vs.Setup());
+
+        WebPBuild.SetupWebPAlias();
     }
 
     private static NPath GetBurstExecutablePath(AsmDefDescription burstAsmDef)
@@ -272,7 +283,7 @@ public class BuildProgram
         //unfortunately we have some tests today that test dotsruntime compatible code,  but the testcode itself is not dotsruntime compatible.
         //blacklist these for now
         if (arg.FileName.Contains("Unity.Scenes.Tests"))
-            return false; 
+            return false;
         if (arg.FileName.Contains("Unity.Build.Tests"))
             return false;
         if (arg.FileName.Contains("Unity.Build.Tests"))
@@ -301,7 +312,7 @@ public class BuildProgram
             return false;
         if (arg.FileName.Contains("Unity.Entities.Determinism.Tests"))
             return false;
-                
+
         return true;
     }
 
@@ -320,12 +331,12 @@ public class BuildProgram
         Backend.Current.AddAliasDependency($"{name.ToLower()}-{ config.Identifier}", deployed.Path);
         Backend.Current.AddAliasDependency("tests", deployed.Path);
     }
-    
+
     //waiting for the burst release with BurstCompilerForLinux in Burst.bee.cs
     public class BurstCompilerForLinuxWaitingForBurstRelease : BurstCompiler
     {
         public override string TargetPlatform { get; set; } = "Linux";
-    
+
         //--target=VALUE         Target CPU <Auto|X86_SSE2|X86_SSE4|X64_SSE2|X64_
         //    SSE4|AVX|AVX2|AVX512|WASM32|ARMV7A_NEON32|ARMV8A_
         //    AARCH64|THUMB2_NEON32> Default: Auto
@@ -338,6 +349,15 @@ public class BuildProgram
         public override string ObjectFileExtension { get; set; } = ".o";
         public override bool UseOwnToolchain { get; set; } = true;
     }
+
+    static NPath GetDeployPathFromExportPath(NPath exportedFile)
+    {
+        var dataRoot = exportedFile.ParentContaining("Data");
+        if (dataRoot == null)
+            return Path.Combine("Data", exportedFile.FileName);
+        return exportedFile.RelativeTo(dataRoot);
+    }
+
     private static DotsRuntimeCSharpProgram SetupGame(AsmDefDescription game)
     {
         var gameProgram = GetOrMakeDotsRuntimeCSharpProgramFor(game);
@@ -348,8 +368,7 @@ public class BuildProgram
         var configsToUse = PerConfigBuildSettings[game.Name].Where(config => !CanSkipSetupOf(game.Name, config));
         foreach (var config in configsToUse)
         {
-            var withoutExt =
-                new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier);
+            var withoutExt = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier);
             NPath exportManifest = withoutExt.Combine("export.manifest");
             Backend.Current.RegisterFileInfluencingGraph(exportManifest);
             if (exportManifest.FileExists())
@@ -358,7 +377,7 @@ public class BuildProgram
                 foreach (var dataFile in dataFiles.Select(d => new NPath(d)))
                     gameProgram.SupportFiles.Add(
                         c => c.Equals(config),
-                        new DeployableFile(dataFile, "Data/" + dataFile.FileName));
+                        new DeployableFile(dataFile, GetDeployPathFromExportPath(dataFile)));
             }
 
             gameProgram.ProjectFile.StartInfo.Add(
@@ -377,7 +396,7 @@ public class BuildProgram
             {
                 var tinyStandard = new DotNetAssembly(Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"), Framework.FrameworkNone);
                 setupGame = setupGame.WithDeployables(tinyStandard);
-            } 
+            }
 
             var postILProcessedGame = ILPostProcessorTool.SetupInvocation(
                 setupGame,
@@ -388,17 +407,17 @@ public class BuildProgram
         }
 
         var il2CppOutputProgram = new Il2Cpp.Il2CppOutputProgram(gameProgram.AsmDefDescription.Name);
-        
+
         var configToSetupGameBursted = new Dictionary<DotsRuntimeCSharpProgramConfiguration, DotNetAssembly>();
 
         foreach (var kvp in configToSetupGame)
         {
             var config = kvp.Key;
             var setupGame = kvp.Value;
-            
+
             if (config.UseBurst)
             {
-                
+
                 BurstCompiler burstCompiler = null;
                 if (config.Platform is WindowsPlatform)
                 {
@@ -426,13 +445,18 @@ public class BuildProgram
                     burstCompiler.EnableStaticLinkage = false;
                     burstCompiler.Link = false;
                     burstCompiler.EnableDirectExternalLinking = true;
+                    if (config.NativeProgramConfiguration.ToolChain.Architecture is Arm64Architecture)
+                    {
+                        burstCompiler.TargetArchitecture = "ARMV8A_AARCH64";
+                    }
                 }
 
 
-                // Only generate marshaling info for platforms that require marshalling (e.g. Windows DotNet) 
+                // Only generate marshaling info for platforms that require marshalling (e.g. Windows DotNet)
                 // but also if collection checks are enabled (as that is why we need marshalling)
                 burstCompiler.EnableJobMarshalling &= config.EnableUnityCollectionsChecks;
                 burstCompiler.SafetyChecks = config.EnableUnityCollectionsChecks;
+                burstCompiler.DisableWarnings = "BC1370"; // Suppress warning for burst function throwing an exception
 
                 var outputDir = $"artifacts/{game.Name}/{config.Identifier}_bursted";
                 var isWebGL = config.Platform is WebGLPlatform;
@@ -443,7 +467,6 @@ public class BuildProgram
                     extension = "bundle";
 
                 var burstLibName = "lib_burst_generated";
-                var burstDynamicLib = new NativeProgram(burstLibName);
                 DotNetAssembly burstedGame = setupGame;
 
                 var burstlib = BurstCompiler.SetupBurstCompilationForAssemblies(
@@ -453,7 +476,8 @@ public class BuildProgram
                     outputDir,
                     burstLibName,
                     out burstedGame);
-                if (config.Platform is IosPlatform || config.Platform is AndroidPlatform)
+                if ((config.Platform is IosPlatform || config.Platform is AndroidPlatform) &&
+                    config.NativeProgramConfiguration.ToolChain.DynamicLibraryFormat.Extension == "a") // static lib based toolchain
                 {
                     il2CppOutputProgram.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
                     il2CppOutputProgram.Defines.Add(
@@ -462,6 +486,7 @@ public class BuildProgram
                 }
                 else
                 {
+                    var burstDynamicLib = new NativeProgram(burstLibName);
                     burstDynamicLib.Libraries.Add(c => c.Equals(config.NativeProgramConfiguration), burstlib);
                     burstDynamicLib.Libraries.Add(
                         c => c.Equals(config.NativeProgramConfiguration),
@@ -472,6 +497,12 @@ public class BuildProgram
                             .Select(
                                 p => new NativeProgramAsLibrary(((DotsRuntimeCSharpProgram) p).NativeProgram)
                                     {BuildMode = NativeProgramLibraryBuildMode.Dynamic}));
+
+                    if (config.Platform is IosPlatform || config.Platform is AndroidPlatform)
+                    {
+                        NativeJobsPrebuiltLibrary.AddToNativeProgram(burstDynamicLib);
+                    }
+
                     DotsRuntimeCSharpProgram.SetupDotsRuntimeNativeProgram(burstLibName, burstDynamicLib);
 
                     var builtBurstLib = burstDynamicLib.SetupSpecificConfiguration(
@@ -511,7 +542,7 @@ public class BuildProgram
             var config = kvp.Key;
             var setupGame = kvp.Value;
             NPath deployPath = GameDeployDirectoryFor(gameProgram, config);
-            
+
             IDeployable deployedGame;
             NPath entryPointExecutable = null;
 
@@ -532,17 +563,50 @@ public class BuildProgram
                         gameProgram.SupportFiles.For(config).Concat(il2CppOutputProgram.SupportFiles.For(config.NativeProgramConfiguration))
                         );
                 }
-                deployedGame = builtNativeProgram.DeployTo(deployPath);
-                entryPointExecutable = deployedGame.Path;
-                if (config.EnableManagedDebugging && !(builtNativeProgram is IPackagedAppExtension))
-                    Backend.Current.AddDependency(deployedGame.Path, Il2Cpp.CopyIL2CPPMetadataFile(deployPath, setupGame));
+
+                NPath exportManifest = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier).Combine("export.manifest");
+                if (config.PlatformBuildConfig is WebBuildConfig webBuildConfig && webBuildConfig.SingleFile && exportManifest.FileExists())
+                {
+                    string htmlPackager = LowLevelRoot.Combine("WebSupport", "package_single_file.js").ToString();
+                    NPath deployedHtmlPath = GameDeployBinaryFor(gameProgram, config);
+                    string htmlPath = (builtNativeProgram as EmscriptenExecutable).Path.ToString();
+                    var dataFiles = exportManifest.MakeAbsolute().ReadAllLines();
+                    Backend.Current.AddAction(
+                        actionName: "Package Single File",
+                        targetFiles: new[] { deployedHtmlPath },
+                        inputs: new[] { htmlPackager, htmlPath }.Concat(dataFiles).Select(d => new NPath(d)).ToArray(),
+                        executableStringFor: TinyEmscripten.NodeExe.ToString().InQuotes(),
+                        commandLineArguments: new[] { htmlPackager.InQuotes(), deployedHtmlPath.ToString().InQuotes(), htmlPath.InQuotes(), exportManifest.ToString().InQuotes() },
+                        allowUnexpectedOutput: false,
+                        allowedOutputSubstrings: new string[] { }
+                    );
+                    deployedGame = new DeployableFile(deployedHtmlPath);
+                    entryPointExecutable = deployedGame.Path;
+                }
+                else
+                {
+                    deployedGame = builtNativeProgram.DeployTo(deployPath);
+                    entryPointExecutable = deployedGame.Path;
+                    if (config.EnableManagedDebugging && !(builtNativeProgram is IPackagedAppExtension))
+                        Backend.Current.AddDependency(deployedGame.Path, Il2Cpp.CopyIL2CPPMetadataFile(deployPath, setupGame));
+                }
+
+                // make sure http-server gets fetched from stevedore.  this should probably go elsewhere, but this is
+                // a convenient quick hack place.
+                if (config.PlatformBuildConfig is WebBuildConfig)
+                {
+                    var httpserver = new StevedoreArtifact("http-server");
+                    Backend.Current.Register(httpserver);
+                    var httpserverpath = httpserver.Path.Combine("bin", "http-server");
+                    Backend.Current.AddDependency(deployedGame.Path, httpserverpath);
+                }
             }
             else
             {
                 deployedGame  = setupGame.DeployTo(deployPath);
 
                 var dotNetAssembly = (DotNetAssembly) deployedGame;
-                
+
                 //Usually a dotnet runtime game does not have a static void main(), and instead references another "entrypoint asmdef" that provides it.
                 //This is convenient, but what makes it weird is that you have to start YourEntryPoint.exe  instead of YourGame.exe.   Until we have a better
                 //solution for this, we're going to copy YourEntryPoint.exe to YourGame.exe, so that it's easier to find, and so that when it runs and you look
@@ -550,7 +614,8 @@ public class BuildProgram
                 if (deployedGame.Path.HasExtension("dll"))
                 {
                     var to = deployPath.Combine(deployedGame.Path.ChangeExtension("exe").FileName);
-                    var from = dotNetAssembly.RecursiveRuntimeDependenciesIncludingSelf.SingleOrDefault(a=>a.Path.HasExtension("exe"))?.Path;
+                    // Do an explicit check for the entrypoint.exe as a program may refer to other exes as assembly references
+                    var from = dotNetAssembly.RecursiveRuntimeDependenciesIncludingSelf.SingleOrDefault(a=>a.Path.FileName == "Unity.Runtime.EntryPoint.exe")?.Path;
                     if (from == null)
                         throw new InvalidProgramException($"Program {dotNetAssembly.Path} is an executable-like thing, but doesn't reference anything with Main");
                     Backend.Current.AddDependency(deployedGame.Path, CopyTool.Instance().Setup(to, from));
@@ -568,6 +633,14 @@ public class BuildProgram
             //in this block, they compare the "quick way to determine where the binary will be placed, and what the start executable is",  with the
             //actual return values returned from .DeployTo(), when we do run the actual buildcode.
             NPath deployedGamePath = GameDeployBinaryFor(gameProgram, config);
+
+            //Identifier with slash means that this is complementary target and we should skip steps which are main target specific.
+            //See comment in DotsConfigs.cs DotsConfigs.MakeConfigs() method for details.
+            if (config.Identifier.IndexOf('/') != -1)
+            {
+                continue;
+            }
+
             if (deployedGame.Path != deployedGamePath)
                 throw new InvalidProgramException($"We expected deployPath to be {deployedGamePath}, but in reality it was {deployedGame.Path}");
             var expectedEntryPointExecutable = EntryPointExecutableFor(gameProgram, config);
@@ -584,7 +657,7 @@ public class BuildProgram
     {
         if (gameProgram.FileName.EndsWith(".exe") || config.ScriptingBackend != ScriptingBackend.Dotnet)
             return GameDeployBinaryFor(gameProgram,config);
-       
+
         return GameDeployDirectoryFor(gameProgram, config).Combine(new NPath(gameProgram.FileName).FileNameWithoutExtension+".exe");
     }
 
@@ -593,10 +666,10 @@ public class BuildProgram
         var ext = config.NativeProgramConfiguration.ExecutableFormat.Extension;
         if (!ext.StartsWith(".") && !String.IsNullOrEmpty(ext))
             ext = "." + ext;
-        var fileName = config.ScriptingBackend == ScriptingBackend.Dotnet ? 
+        var fileName = config.ScriptingBackend == ScriptingBackend.Dotnet ?
             game.FileName
             : new NPath(game.AsmDefDescription.Name) + ext;
-        
+
         return GameDeployDirectoryFor(game, config).Combine(fileName);
     }
 

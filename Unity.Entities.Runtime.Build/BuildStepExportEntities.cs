@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
+using Unity.Build.DotsRuntime;
 using Unity.Build.Internals;
 using Unity.Scenes;
 using Unity.Scenes.Editor;

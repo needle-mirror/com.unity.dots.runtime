@@ -61,6 +61,14 @@ namespace Unity.Entities.Runtime.Build
             jsonObject["FinalOutputDirectory"] = GetFinalOutputDirectory(context, targetName);
             jsonObject["DotsConfig"] = profile.Configuration.ToString();
 
+            // todo: Remove once we have a single scene export pipeline
+            if (profile.UseNewPipeline)
+            {
+                var scriptingSettings = context.GetOrCreateValue<DotsRuntimeScriptingSettings>();
+                scriptingSettings.ScriptingDefines.Add("EXPERIMENTAL_SCENE_LOADING");
+                context.SetComponent(scriptingSettings);
+            }
+
             foreach (var component in context.GetComponents<IDotsRuntimeBuildModifier>())
             {
                 component.Modify(jsonObject);
@@ -77,7 +85,7 @@ namespace Unity.Entities.Runtime.Build
             var file = rootAssembly.StagingDirectory.Combine(targetName).GetFile("export.manifest");
             file.UpdateAllLines(manifest.ExportedFiles.Select(x => x.FullName).ToArray());
 
-            profile.Target.WriteBeeConfigFile(DotsRuntimeRootAssembly.BeeRootDirectory.ToString());
+            profile.Target.WriteBuildConfiguration(context, DotsRuntimeRootAssembly.BeeRootDirectory.ToString());
 
             return context.Success();
         }

@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-// Uses GetLastFreePtr() to test / validate.
-[assembly:InternalsVisibleTo("Unity.ZeroJobs")]
+[assembly: InternalsVisibleTo("Unity.ZeroJobs")]
+[assembly: InternalsVisibleTo("Unity.ZeroJobs.Tests")]
 [assembly: InternalsVisibleTo("Unity.Entities.Tests")]
-
+[assembly: InternalsVisibleTo("Unity.Tiny.UnityInstance.Tests")]

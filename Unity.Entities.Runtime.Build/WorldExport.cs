@@ -1,15 +1,59 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using Unity.Build;
 using Unity.Collections;
-using Unity.Entities;
 using Unity.Entities.Serialization;
-using Unity.Tiny.Codec;
+using Unity.Scenes;
+using Unity.Core.Compression;
 using Unity.Entities.Runtime;
 
 namespace Unity.Entities.Runtime.Build
 {
     internal static class WorldExport
     {
+        internal static void UpdateManifest(BuildManifest manifest, string scenePath, Hash128 subSceneGuid, SceneSectionData[] sections, DirectoryInfo dataDirectory, string outputDirectory)
+        {
+            //Add the entity header file and all the sections to the manifest
+            List<FileInfo> exportedFiles = new List<FileInfo>();
+            var headerFile = dataDirectory.GetFile(Path.Combine(outputDirectory,  subSceneGuid + "." + EntityScenesPaths.GetExtension(EntityScenesPaths.PathType.EntitiesHeader)));
+            exportedFiles.Add(headerFile);
+            foreach (var section in sections)
+            {
+                var entityFile = dataDirectory.GetFile(Path.Combine(outputDirectory, section.SceneGUID + "." + section.SubSectionIndex + "." + EntityScenesPaths.GetExtension(EntityScenesPaths.PathType.EntitiesBinary)));
+                exportedFiles.Add(entityFile);
+            }
+            manifest.Add(new Guid(subSceneGuid.ToString()), scenePath, exportedFiles);
+        }
+
+        internal static DirectoryInfo GetOrCreateDataDirectoryFrom(DirectoryInfo targetDirectory)
+        {
+            var dataDirectory = targetDirectory.Combine("Data");
+            if (string.IsNullOrEmpty(dataDirectory.FullName))
+            {
+                throw new ArgumentException($"Invalid output file directory: {dataDirectory.FullName}", nameof(dataDirectory.FullName));
+            }
+            if (!Directory.Exists(dataDirectory.FullName))
+            {
+                Directory.CreateDirectory(dataDirectory.FullName);
+            }
+            return dataDirectory;
+        }
+
+        internal static DirectoryInfo GetOrCreateSubSceneDirectoryFrom(DirectoryInfo targetDirectory)
+        {
+            var subscenesDirectory = GetOrCreateDataDirectoryFrom(targetDirectory).Combine("SubScenes");
+            if (string.IsNullOrEmpty(subscenesDirectory.FullName))
+            {
+                throw new ArgumentException($"Invalid output file directory: {subscenesDirectory.FullName}", nameof(subscenesDirectory.FullName));
+            }
+            if (!Directory.Exists(subscenesDirectory.FullName))
+            {
+                Directory.CreateDirectory(subscenesDirectory.FullName);
+            }
+            return subscenesDirectory;
+        }
+
         public static bool WriteWorldToFile(World world, FileInfo outputFile)
         {
             // TODO need to bring this back

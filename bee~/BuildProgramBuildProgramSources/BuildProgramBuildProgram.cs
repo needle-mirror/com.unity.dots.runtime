@@ -17,7 +17,7 @@ using Unity.BuildSystem.NativeProgramSupport;
 class BuildProgramBuildProgram
 {
     static CSharpProgramConfiguration CSharpConfig { get; set; }
-    
+
     static void Main(string[] path)
     {
         var bee = new NPath(typeof(CSharpProgram).Assembly.Location);
@@ -91,13 +91,13 @@ class BuildProgramBuildProgram
             References = { bee, new SystemReference("System.Xml.Linq"), new SystemReference("System.Xml") },
             ProjectFile = { Path = NPath.CurrentDirectory.Combine("buildprogram.gen.csproj")}
         };
-        
+        buildProgram.Defines.Add("DOTS_BUILD_PROGRAM");
+
         ((TundraBackend)Backend.Current).AddExtensionToBeScannedByHashInsteadOfTimeStamp("json", "config");
-        
+
         buildProgram.ProjectFile.AddCustomLinkRoot(bee.Parent.Combine("BuildProgramSources"), ".");
         buildProgram.SetupSpecificConfiguration(CSharpConfig);
-        
-        
+
         var buildProgrambuildProgram = new CSharpProgram()
         {
             FileName = "buildprogrambuildprogram.exe",
@@ -109,7 +109,7 @@ class BuildProgramBuildProgram
             References = { bee }
         };
         buildProgrambuildProgram.SetupSpecificConfiguration(CSharpConfig);
-        
+
         new VisualStudioSolution()
         {
             Path = "build.gen.sln",
@@ -119,7 +119,11 @@ class BuildProgramBuildProgram
 
     private static IEnumerable<NPath> HarvestBeeFilesFrom(NPath asmdefDirectory)
     {
+        // Build program specific files
         var beeDir = asmdefDirectory.Combine("bee~");
-        return !beeDir.DirectoryExists() ? Enumerable.Empty<NPath>() : beeDir.Files("*.cs", true);
+        var beeFiles = !beeDir.DirectoryExists() ? Enumerable.Empty<NPath>() : beeDir.Files("*.cs", true);
+        // files which required for both Build program and for Editor assemblies
+        beeDir = asmdefDirectory.Combine("bee");
+        return !beeDir.DirectoryExists() ? beeFiles : beeFiles.Concat(beeDir.Files("*.cs", true));
     }
 }

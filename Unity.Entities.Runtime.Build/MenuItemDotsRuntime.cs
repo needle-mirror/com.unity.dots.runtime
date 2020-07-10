@@ -1,5 +1,6 @@
 using System.IO;
 using Unity.Build.Common;
+using Unity.Build.DotsRuntime;
 using Unity.Build.Editor;
 using Unity.Entities.Conversion;
 using UnityEditor;
@@ -23,10 +24,7 @@ namespace Unity.Entities.Runtime.Build
                 new GeneralSettings(),
                 new SceneList(),
                 new ConversionSystemFilterSettings(),
-                new DotsRuntimeBuildProfile
-                {
-                    Pipeline = new DotsRuntimeBuildPipeline()
-                });
+                new DotsRuntimeBuildProfile());
         }
     }
 }

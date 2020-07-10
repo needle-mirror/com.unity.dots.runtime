@@ -74,7 +74,7 @@ namespace Unity.Collections.LowLevel.Unsafe
         {
             if (NativeLeakDetection.Mode != NativeLeakDetectionMode.Disabled && allocator != Allocator.Temp)
             {
-                if (Unity.Jobs.LowLevel.Unsafe.JobsUtility.IsExecutingJob())
+                if (Unity.Jobs.LowLevel.Unsafe.JobsUtility.IsExecutingJob)
                     throw new System.InvalidOperationException("Jobs can only create Temp memory");
 
                 sentinel = new DisposeSentinel

@@ -1,10 +1,31 @@
-﻿using System;
-using System.Diagnostics;
+using System;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs.LowLevel.Unsafe;
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+using Unity.Development.JobsDebugger;
+#endif
 using UnityEngine.Assertions;
+
+// This attribute must be outside of a namespace so its full name is "NativePInvokeCallbackAttribute"
+/// <summary>
+/// You likely don't want this attribute. This is an IL2CPP attribute to signify a pinvoke method is purely unmanaged 
+/// and can thus be invoked directly from native code. As a result Marshal.GetFunctionPointerForDelegate(decoratedMethod) will
+/// not generate a reverse callback wrapper to attach to the managed VM. Do not use this attribute if your
+/// method requires managed data/types, doing so will result in undefined behaviour (almost certainly a crash at _some point_).
+/// Most users likely want to use [MonoPInvokeCallback] instead as that will handle all necessary managed
+/// type management when pinvoked.
+/// </summary>
+/// <remarks>
+/// This attribute is useful for passing delegates of Bursted functions from managed code into native code where
+/// they will be invoked. Without this attribute, IL2CPP will generate a reverse callback wrapper for invoking
+/// the managed delegate from native code and will attach to the VM, which is unsupported in DOTS Runtime from native threads.
+/// </remarks>
+public class NativePInvokeCallbackAttribute : Attribute
+{
+
+}
 
 namespace Unity.Jobs
 {
@@ -12,11 +33,16 @@ namespace Unity.Jobs
     public interface IJobBase
     {
         // Generated functions from code gen.
-        // Called at the Schedule to set up safety handles.
-        int PrepareJobAtScheduleTimeFn_Gen();
-        // A wrapper around the user's Execute() method.
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+        // Called immediately preceeding Schedule to validate safety handles.
+        unsafe int PrepareJobAtPreScheduleTimeFn_Gen(ref DependencyValidator data, ref JobHandle dependsOn, void* deferredSafety);
+        // Called immediately proceeding Schedule to update safety nodes.
+        void PrepareJobAtPostScheduleTimeFn_Gen(ref DependencyValidator data, ref JobHandle scheduledJob);
+#endif
+        // A wrapper around the user's Execute() method. This is called per-worker.
         void PrepareJobAtExecuteTimeFn_Gen(int jobIndex);
-        // Free memory, performs any cleanup.
+        // Free memory, performs any cleanup. Happens once after all workers have completed, on the same worker thread
+        // as the last one to complete using that worker thread's copy of the job data.
         void CleanupJobFn_Gen();
         // Patches the min/max range of a parallel job so that multiple threads
         // aren't writing to the same indices.
@@ -43,6 +69,11 @@ namespace Unity.Jobs
         internal IntPtr JobGroup;
         internal uint Version;
 
+        public bool Equals(JobHandle other)
+        {
+            return JobGroup == other.JobGroup && Version == other.Version;
+        }
+
         public static void ScheduleBatchedJobs()
         {
 #if !UNITY_SINGLETHREADED_JOBS
@@ -58,58 +89,58 @@ namespace Unity.Jobs
 
         public void Complete()
         {
-#if !UNITY_SINGLETHREADED_JOBS
-            if (JobsUtility.JobQueue == IntPtr.Zero || JobGroup == IntPtr.Zero)
-                return;
-
-            JobsUtility.Complete(JobsUtility.BatchScheduler, ref this);
-#endif
+            JobsUtility.ScheduleBatchedJobsAndComplete(ref this);
         }
 
-        public bool IsCompleted
+        public bool IsCompleted => JobsUtility.IsCompleted(ref this);
+
+        public static bool CheckFenceIsDependencyOrDidSyncFence(JobHandle dependency, JobHandle dependsOn)
         {
-#if UNITY_SINGLETHREADED_JOBS
-            get => true;
-#else
-            get => JobsUtility.IsCompleted(JobsUtility.BatchScheduler, ref this) > 0;
-#endif
+            return JobsUtility.CheckFenceIsDependencyOrDidSyncFence(ref dependency, ref dependsOn);
         }
-
-        public static bool CheckFenceIsDependencyOrDidSyncFence(JobHandle dependency, JobHandle writer) => true;
 
         public static unsafe JobHandle CombineDependencies(NativeArray<JobHandle> jobHandles)
         {
-#if UNITY_SINGLETHREADED_JOBS
-            return default(JobHandle);
-#else
             var fence = new JobHandle();
-            JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, new IntPtr(jobHandles.GetUnsafeReadOnlyPtr()), jobHandles.Length);
-            return fence;
+#if UNITY_SINGLETHREADED_JOBS
+            fence.JobGroup = JobsUtility.GetFakeJobGroupId();
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            JobsUtility.DebugDidScheduleJob(ref fence, (JobHandle*)jobHandles.GetUnsafeReadOnlyPtr(), jobHandles.Length);
 #endif
+#else
+            JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, (JobHandle*)jobHandles.GetUnsafeReadOnlyPtr(), jobHandles.Length);
+#endif
+            return fence;
         }
 
         public static unsafe JobHandle CombineDependencies(JobHandle one, JobHandle two)
         {
-#if UNITY_SINGLETHREADED_JOBS
-            return default(JobHandle);
-#else
             var fence = new JobHandle();
             var dependencies = stackalloc JobHandle[] { one, two };
-            JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, new IntPtr(UnsafeUtility.AddressOf(ref dependencies[0])), 2);
-            return fence;
+#if UNITY_SINGLETHREADED_JOBS
+            fence.JobGroup = JobsUtility.GetFakeJobGroupId();
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            JobsUtility.DebugDidScheduleJob(ref fence, (JobHandle*)UnsafeUtility.AddressOf(ref dependencies[0]), 2);
 #endif
+#else
+            JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, (JobHandle*)UnsafeUtility.AddressOf(ref dependencies[0]), 2);
+#endif
+            return fence;
         }
 
         public static unsafe JobHandle CombineDependencies(JobHandle one, JobHandle two, JobHandle three)
         {
+            var fence = new JobHandle();
+            var dependencies = stackalloc JobHandle[] { one, two, three };
 #if UNITY_SINGLETHREADED_JOBS
-            return default(JobHandle);
-#else
-             var fence = new JobHandle();
-             var dependencies = stackalloc JobHandle[] { one, two, three };
-             JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, new IntPtr(UnsafeUtility.AddressOf(ref dependencies[0])), 3);
-             return fence;
+            fence.JobGroup = JobsUtility.GetFakeJobGroupId();
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            JobsUtility.DebugDidScheduleJob(ref fence, (JobHandle*)UnsafeUtility.AddressOf(ref dependencies[0]), 3);
 #endif
+#else
+            JobsUtility.ScheduleMultiDependencyJob(ref fence, JobsUtility.BatchScheduler, (JobHandle*)UnsafeUtility.AddressOf(ref dependencies[0]), 3);
+#endif
+            return fence;
         }
     }
 
@@ -123,14 +154,14 @@ namespace Unity.Jobs
     {
         internal struct JobProducer<T> where T : struct, IJob
         {
-            static IntPtr s_JobReflectionData;
+            static unsafe JobsUtility.ReflectionDataProxy* s_JobReflectionData;
             internal T JobData;
 
-            public static IntPtr Initialize()
+            public static unsafe JobsUtility.ReflectionDataProxy* Initialize()
             {
-                if (s_JobReflectionData == IntPtr.Zero)
+                if (s_JobReflectionData == null)
                 {
-                    s_JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(JobProducer<T>), typeof(T),
+                    s_JobReflectionData = (JobsUtility.ReflectionDataProxy*)JobsUtility.CreateJobReflectionData(typeof(JobProducer<T>), typeof(T),
                         JobType.Single,
                         (ExecuteJobFunction)Execute);
                 }
@@ -181,17 +212,17 @@ namespace Unity.Jobs
     {
         internal struct JobParallelForProducer<T> where T : struct, IJobParallelFor
         {
-            static IntPtr s_JobReflectionData;
+            static unsafe JobsUtility.ReflectionDataProxy* s_JobReflectionData;
             public T JobData;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             public int Sentinel;
 #endif
 
-            public static IntPtr Initialize()
+            public static unsafe JobsUtility.ReflectionDataProxy* Initialize()
             {
-                if (s_JobReflectionData == IntPtr.Zero)
+                if (s_JobReflectionData == null)
                 {
-                    s_JobReflectionData = JobsUtility.CreateJobReflectionData(typeof(void), typeof(void),
+                    s_JobReflectionData = (JobsUtility.ReflectionDataProxy*)JobsUtility.CreateJobReflectionData(typeof(void), typeof(void),
                         JobType.ParallelFor,
                         (ExecuteJobFunction) Execute);
                 }
@@ -242,6 +273,23 @@ namespace Unity.Jobs
                 dependsOn,
                 ScheduleMode.Batched);
             return JobsUtility.ScheduleParallelFor(ref scheduleParams, arrayLength, innerloopBatchCount);
+        }
+
+        public static unsafe void Run<T>(this T jobData, int arrayLength) where T : struct, IJobParallelFor
+        {
+            var parallelForJobProducer = new JobParallelForProducer<T>()
+            {
+                JobData = jobData,
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+                Sentinel = 37 + arrayLength    // check that code is patched as expected
+#endif
+            };
+
+            var scheduleParams = new JobsUtility.JobScheduleParameters(UnsafeUtility.AddressOf(ref parallelForJobProducer),
+                JobParallelForProducer<T>.Initialize(),
+                default,
+                ScheduleMode.Run);
+            JobsUtility.ScheduleParallelFor(ref scheduleParams, arrayLength, arrayLength);
         }
     }
 }

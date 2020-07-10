@@ -82,6 +82,18 @@ namespace Unity.Collections.LowLevel.Unsafe
 #endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool EnumEquals<T>(T a, T b) where T : struct
+        {
+            return PatchedUnsafeUtility.EnumEquals<T>(a, b);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int EnumToInt<T>(T value) where T : struct
+        {
+            return PatchedUnsafeUtility.EnumToInt<T>(value);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ref T As<U, T>(ref U from)
         {
             return ref PatchedUnsafeUtility.As<U, T>(ref from);

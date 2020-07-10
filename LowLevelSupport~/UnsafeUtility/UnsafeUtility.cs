@@ -76,6 +76,18 @@ namespace ForPatching
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool EnumEquals<T>(T a, T b) where T : struct
+        {
+            throw new NotImplementedException("Patching this method failed");
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int EnumToInt<T>(T value) where T : struct
+        {
+            throw new NotImplementedException("Patching this method failed");
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ref T As<U, T>(ref U from)
         {
             throw new NotImplementedException("Patching this method failed");

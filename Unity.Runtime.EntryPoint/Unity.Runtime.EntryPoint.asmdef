@@ -13,7 +13,7 @@
     "autoReferenced": true,
     "defineConstraints": [
         "UNITY_DOTS_ENTRYPOINT",
-        "UNITY_DOTSPLAYER"
+        "UNITY_DOTSRUNTIME"
     ],
     "versionDefines": [],
     "noEngineReferences": false

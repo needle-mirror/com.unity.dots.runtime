@@ -56,17 +56,26 @@ public static class Il2Cpp
     });
 
     private const string metadataFilePath = "Data/Metadata/global-metadata.dat";
-    
+
     public static IFileBundle Il2CppDependencies => _il2cppAndDeps.Value.Deps;
     public static IFileBundle Distribution => _il2cppAndDeps.Value.Distribution;
 
     private static DotNetAssembly _tinyCorlib => new DotNetAssembly(Distribution.Path.Combine("build/profiles/Tiny/mscorlib.dll"), Framework.FrameworkNone, referenceAssemblyPath:
         Distribution.Path.Combine("build/profiles/TinyStandard/netstandard.dll"));
 
-    private static readonly DotNetRunnableProgram Il2CppRunnableProgram =
-        new DotNetRunnableProgram(new DotNetAssembly(Distribution.Path.Combine("build/deploy/net471/il2cpp.exe"),
-            Framework.Framework46));
-
+    private static string Il2CppRunnableProgram
+    {
+        get
+        {
+            if (HostPlatform.IsWindows)
+                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/win-x64/publish/il2cpp.exe").ToString().Replace('/', '\\');
+            if (HostPlatform.IsOSX)
+                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/osx-x64/publish/il2cpp").ToString();
+            if (HostPlatform.IsLinux)
+                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/osx-x64/publish/il2cpp").ToString();
+            throw new NotImplementedException("IL2CPP is not built for the host platform");
+        }
+    }
     public static DotNetAssembly TinyCorlib => _tinyCorlib;
 
     private static IFileBundle Il2CppFromSteve()
@@ -85,7 +94,11 @@ public static class Il2Cpp
 
     private static WarningAndPolicy[] GetGccLikeWarningPolicies()
     {
-        return new[] {new WarningAndPolicy("invalid-offsetof", WarningPolicy.Silent)};
+        return new[]
+        {
+            new WarningAndPolicy("invalid-offsetof", WarningPolicy.Silent),
+            new WarningAndPolicy("missing-declarations", WarningPolicy.Silent),
+        };
     }
 
     internal class Il2CppOutputProgram : NativeProgram
@@ -101,13 +114,12 @@ public static class Il2Cpp
                 .Add(l => l.WithSubSystemType(SubSystemType.Console).WithEntryPoint("wWinMainCRTStartup"));
 
             Libraries.Add(c => c.ToolChain.Platform is WindowsPlatform, new SystemLibrary("kernel32.lib"));
-            Defines.Add(c => c.Platform is WebGLPlatform, "IL2CPP_DISABLE_GC=1");
 
             this.DynamicLinkerSettingsForMsvc().Add(l => l
                 .WithSubSystemType(SubSystemType.Console)
                 .WithEntryPoint("wWinMainCRTStartup")
             );
-            Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null || c.Platform.Name == "IOS", "FORCE_PINVOKE_INTERNAL=1");
+            Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null, "FORCE_PINVOKE_INTERNAL=1");
 
             this.DynamicLinkerSettingsForEmscripten().Add(c =>
                 c.WithShellFile(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_shell.html")));
@@ -126,9 +138,14 @@ public static class Il2Cpp
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithExceptions(true));
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithRTTI(true));
             IncludeDirectories.Add(ManagedDebuggingIsEnabled, Distribution.Path.Combine("libil2cpp/pch"));
-            this.CompilerSettingsForMsvc().Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
+            
             CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
+
+            this.CompilerSettingsForMsvc().Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
             this.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
+            this.CompilerSettingsForClang().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
+            this.CompilerSettingsForEmscripten().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
+            this.CompilerSettingsForIos().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
             NativeJobsPrebuiltLibrary.AddToNativeProgram(this); // Only required for managed debugging
         }
 
@@ -188,14 +205,30 @@ public static class Il2Cpp
             "--libil2cpp-static",
             "--emit-null-checks=0",
             "--enable-array-bounds-check=0",
-            "--enable-predictable-output",
             //"--enable-stacktrace=1"
             //"--profiler-report",
             //"--enable-stats",
         };
 
         if (config.EnableManagedDebugging)
+        {
             args.Add("--enable-debugger");
+            // When the debugger is enabled, the develop and release configurations take a very long
+            // time to build, because the debugger code generation injects lots of code. Limit the
+            // assemblies that we generate debug information for so that build times will be reasonable.
+            if (config.DotsConfiguration == DotsConfiguration.Develop ||
+                config.DotsConfiguration == DotsConfiguration.Release)
+            {
+                foreach (var assembly in inputAssembly.RecursiveRuntimeDependenciesIncludingSelf.Where(r => r is DotNetAssembly))
+                {
+                    if (!assembly.Path.FileName.StartsWith("Unity.") && assembly.Path.FileName != "mscorlib.dll" &&
+                        assembly.Path.FileName != "netstandard.dll" && assembly.Path.FileName != "UnsafeUtility.dll")
+                        args.Add($"--debug-assembly-name={assembly.Path.FileName}");
+                }
+
+                args.Add("--debug-assembly-name=Unity.Entities.dll");
+            }
+        }
 
         if (enableDevelopmentMode)
             args.Add("--development-mode");
@@ -205,105 +238,31 @@ public static class Il2Cpp
             iarrdis.SelectMany(a =>
                 new[] {"--assembly", a.Path.ToString()}));
 
-        var sharedFileNames = new List<string>
-        {
-            // static files
-            //"Il2CppComCallableWrappers.cpp",
-            //"Il2CppProjectedComCallableWrapperMethods.cpp",
-            "driver.cpp",
-            "GenericMethods.cpp",
-            "GenericMethods1.cpp",
-            "GenericMethods2.cpp",
-            "GenericMethods3.cpp",
-            "GenericMethods4.cpp",
-            "GenericMethods5.cpp",
-            "GenericMethods6.cpp",
-            "GenericMethods7.cpp",
-            "GenericMethods8.cpp",
-            "GenericMethods9.cpp",
-            "Generics.cpp",
-            "Generics1.cpp",
-            "Generics2.cpp",
-            "Generics3.cpp",
-            "Generics4.cpp",
-            "Generics5.cpp",
-            "Generics6.cpp",
-            "Generics7.cpp",
-            "Generics8.cpp",
-            "Generics9.cpp",
-            "Il2CppGenericComDefinitions.cpp",
-        };
-
-        var developmentModeExtraFileNames = new[]
-        {
-            "TinyMethods.cpp",
-        };
-
-        var nonDebuggerExtraFileNames = new[]
-        {
-            "TinyTypes.cpp",
-            "StaticConstructors.cpp",
-            "ModuleInitializers.cpp",
-            "StringLiterals.cpp",
-            "StaticInitialization.cpp",
-        };
-
-        var debuggerExtraFileNames = new[]
-        {
-            "Il2CppGenericClassTable.c",
-            "Il2CppGenericInstDefinitions.c",
-            "Il2CppGenericMethodDefinitions.c",
-            "Il2CppGenericMethodTable.c",
-            "Il2CppMetadataRegistration.c",
-            "Il2CppMetadataUsage.c",
-            "Il2CppTypeDefinitions.c",
-            "Il2CppCodeRegistration.cpp",
-            "Il2CppCCTypeValuesTable.cpp",
-            "Il2CppCCalculateTypeValues.cpp",
-            "Il2CppGenericMethodPointerTable.cpp",
-            "Il2CppInteropDataTable.cpp",
-            "Il2CppInvokerTable.cpp",
-            "Il2CppReversePInvokeWrapperTable.cpp",
-            "UnresolvedVirtualCallStubs.cpp",
-        };
-
-        IEnumerable<string> il2cppOutputFileNames = sharedFileNames;
-
-
-        if (config.EnableManagedDebugging)
-        {
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(debuggerExtraFileNames);
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Debugger.c"));
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Codegen.c"));
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + "_Attr.cpp"));
-        }
-        else
-        {
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(nonDebuggerExtraFileNames);
-        }
-
-        if (enableDevelopmentMode && !config.EnableManagedDebugging)
-            il2cppOutputFileNames = il2cppOutputFileNames.Concat(developmentModeExtraFileNames);
-
-        var il2cppOutputFiles = il2cppOutputFileNames.Concat(iarrdis.Select(asm => asm.Path.FileNameWithoutExtension + ".cpp"))
-            .Select(il2CppTargetDir.Combine).ToArray();
+        args.Add($"--entry-assembly-name={inputAssembly.Path.FileNameWithoutExtension}");
 
         var il2cppInputs = Distribution.GetFileList("build/deploy/net471")
             .Concat(iarrdis.SelectMany(a => a.Paths))
             .Concat(new[] {Distribution.Path.Combine("libil2cpptiny", "libil2cpptiny.icalls")});
 
-        var finalOutputFiles = il2cppOutputFiles;
-        if (config.EnableManagedDebugging)
-            finalOutputFiles = finalOutputFiles.Concat(new[] {il2CppTargetDir.Combine(metadataFilePath)}).ToArray();
+        if (new NPath(Il2CppRunnableProgram).Parent.Exists())
+            il2cppInputs = il2cppInputs.Concat(new NPath(Il2CppRunnableProgram).Parent.Files());
 
         Backend.Current.AddAction(
             "Il2Cpp",
-            targetFiles:finalOutputFiles,
+            targetFiles: new NPath[] {},
             inputs: il2cppInputs.ToArray(),
-            Il2CppRunnableProgram.InvocationString,
-            args.ToArray());
+            Il2CppRunnableProgram.ToString(),
+            args.ToArray(),
+            targetDirectories: new NPath[] {il2CppTargetDir});
 
-        return il2cppOutputFiles;
+        if (il2CppTargetDir.DirectoryExists())
+        {
+            var il2cppOutputFiles = il2CppTargetDir.Files();
+            if (il2cppOutputFiles.Length != 0)
+                return il2cppOutputFiles;
+        }
+
+        return new NPath[] {il2CppTargetDir.Combine("dummy.cpp")};
     }
 
     public static NPath CopyIL2CPPMetadataFile(NPath destination, DotNetAssembly inputAssembly)
@@ -428,10 +387,6 @@ public static class Il2Cpp
                 "DISABLE_REMOTING=1",
                 "HAVE_CONFIG_H",
                 "MONO_DLL_EXPORT=1");
-
-            program.Defines.Add(c => c.ToolChain.Platform is WebGLPlatform && ManagedDebuggingIsEnabled(c),
-                "HOST_WASM=1");
-
 
             program.IncludeDirectories.Add(ManagedDebuggingIsEnabled,
             new[]
@@ -604,6 +559,7 @@ public static class Il2Cpp
             "NO_GETENV=1");
 
         program.Defines.Add(c => !(c.Platform is WebGLPlatform), "GC_THREADS=1", "USE_MMAP=1", "USE_MUNMAP=1");
+        program.Defines.Add(c => c.Platform is WebGLPlatform, "EMSCRIPTEN_TINY=1");
         program.Defines.Add(c => c.ToolChain is VisualStudioToolchain, "NOMINMAX", "WIN32_THREADS");
         //program.CompilerSettingsForMsvc().Add(l => l.WithCompilerRuntimeLibrary(CompilerRuntimeLibrary.None));
         return program;

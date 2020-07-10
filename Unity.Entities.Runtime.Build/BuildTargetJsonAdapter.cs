@@ -1,7 +1,7 @@
 using Unity.Serialization.Json;
 using Unity.Serialization.Json.Adapters;
 using UnityEditor;
-using BuildTarget = Unity.Platforms.BuildTarget;
+using BuildTarget = Unity.Build.DotsRuntime.BuildTarget;
 
 namespace Unity.Entities.Runtime.Build
 {

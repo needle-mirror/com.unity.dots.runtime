@@ -1,13 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using Microsoft.Build.Tasks.Deployment.ManifestUtilities;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using Unity.Entities.BuildUtils;
-using Unity.Cecil.Awesome;
 using static Unity.ZeroPlayer.CecilUtils;
 using static Unity.ZeroPlayer.JobCecilUtils;
 
@@ -17,7 +14,8 @@ namespace Unity.ZeroPlayer
     {
         // Note that these can use nameof(Type.Func) when we switch to the ILPP approach.
         // Placed on the IJobBase instance:
-        const string k_PrepareJobAtScheduleTimeFn = "PrepareJobAtScheduleTimeFn_Gen";
+        const string k_PrepareJobAtPreScheduleTimeFn = "PrepareJobAtPreScheduleTimeFn_Gen";
+        const string k_PrepareJobAtPostScheduleTimeFn = "PrepareJobAtPostScheduleTimeFn_Gen";
         const string k_PrepareJobAtExecuteTimeFn = "PrepareJobAtExecuteTimeFn_Gen";
         const string k_CleanupJobFn = "CleanupJobFn_Gen";
         const string k_GetExecuteMethodFn = "GetExecuteMethod_Gen";
@@ -29,7 +27,7 @@ namespace Unity.ZeroPlayer
 
         // Placed on the JobProducer
         const string k_ProducerExecuteFn = "ProducerExecuteFn_Gen";
-        const string k_ProducerScheduleFn = "ProducerScheduleFn_Gen";
+        const string k_ProducerPreScheduleFn = "ProducerPreScheduleFn_Gen";
         const string k_ProducerCleanupFn = "ProducerCleanupFn_Gen";
         const string k_ProducerPatchMinMaxFn = "ProducerPatchMinMaxFn_Gen";
 
@@ -46,6 +44,9 @@ namespace Unity.ZeroPlayer
         // Synchronize with low level job system!
         const int k_ProducerScheduleReturnValue = 4;
         const int k_UserScheduleReturnValue = 2;
+        const int k_UserScheduleReturnValueNoParallel = -2;
+
+        readonly bool m_MultithreadEnabled;
 
         List<AssemblyDefinition> m_Assemblies;
 
@@ -53,9 +54,32 @@ namespace Unity.ZeroPlayer
         readonly AssemblyDefinition m_SystemAssembly;
         readonly AssemblyDefinition m_ZeroJobsAssembly;
         readonly AssemblyDefinition m_LowLevelAssembly;
-        readonly TypeDefinition m_SafetyHandleDef; // if null, then a release build (no safety handles)
+
         readonly TypeDefinition m_DisposeSentinelDef; // if null, then a release build (no safety handles)
-        readonly MethodDefinition m_IJobBase_PrepareJobAtScheduleTimeFnDef;
+        readonly MethodDefinition m_DisposeSentinel_ClearFnDef;
+
+        readonly TypeDefinition m_AtomicSafetyHandleDef;
+        readonly MethodDefinition m_AtomicSafetyHandle_PatchLocalReadOnlyFnDef;
+        readonly MethodDefinition m_AtomicSafetyHandle_PatchLocalWriteOnlyFnDef;
+        readonly MethodDefinition m_AtomicSafetyHandle_PatchLocalReadWriteFnDef;
+        readonly MethodDefinition m_AtomicSafetyHandle_PatchLocalDynamicFnDef;
+        readonly MethodDefinition m_AtomicSafetyHandle_ReleasePatchedFnDef;
+
+        readonly TypeDefinition m_DependencyValidatorDef;
+        readonly MethodDefinition m_DependencyValidator_AllocateKnownFnDef;
+        readonly MethodDefinition m_DependencyValidator_CleanupFnDef;
+        readonly MethodDefinition m_DependencyValidator_RecordAndSanityCheckReadOnlyFnDef;
+        readonly MethodDefinition m_DependencyValidator_RecordAndSanityCheckWritableFnDef;
+        readonly MethodDefinition m_DependencyValidator_RecordDeallocateFnDef;
+        readonly MethodDefinition m_DependencyValidator_RecordAndSanityCheckDynamicFnDef;
+        readonly MethodDefinition m_DependencyValidator_ValidateScheduleSafetyFnDef;
+        readonly MethodDefinition m_DependencyValidator_ValidateDeferredFnDef;
+        readonly MethodDefinition m_DependencyValidator_ValidateDeallocateOnJobCompletionFnDef;
+        readonly MethodDefinition m_DependencyValidator_UpdateDependenciesFnDef;
+
+        readonly TypeDefinition m_IJobBaseDef;
+        readonly MethodDefinition m_IJobBase_PrepareJobAtPreScheduleTimeFnDef;
+        readonly MethodDefinition m_IJobBase_PrepareJobAtPostScheduleTimeFnDef;
         readonly MethodDefinition m_IJobBase_PrepareJobAtExecuteTimeFnDef;
         readonly MethodDefinition m_IJobBase_CleanupJobFnDef;
         readonly MethodDefinition m_IJobBase_IsBurstedFnDef;
@@ -64,26 +88,25 @@ namespace Unity.ZeroPlayer
         readonly MethodDefinition m_IJobBase_GetUnmanagedJobSizeFnDef;
         readonly MethodDefinition m_IJobBase_GetMarshalToBurstMethodFnDef;
         readonly MethodDefinition m_IJobBase_GetMarshalFromBurstMethodFnDef;
-        readonly TypeDefinition m_IJobBaseDef;
-        readonly TypeDefinition m_UnsafeUtilityDef;
+
         readonly TypeDefinition m_JobsUtilityDef;
-        readonly TypeDefinition m_PinvokeCallbackAttribute;
-        readonly TypeDefinition m_JobMetaDataDef;
-        readonly TypeDefinition m_JobRangesDef;
-        readonly MethodDefinition m_SafetyHandle_ReleaseFnDef;
-        readonly MethodDefinition m_SafetyHandle_PatchLocalFnDef;
-        readonly MethodDefinition m_SafetyHandle_AllowWriteOnlyFnDef;
-        readonly MethodDefinition m_SafetyHandle_AllowReadOnlyFnDef;
-        readonly MethodDefinition m_SafetyHandle_UnpatchLocalFnDef;
-        readonly MethodDefinition m_DisposeSentinel_ClearFnDef;
-        readonly TypeDefinition m_IntPtrDef;
-        readonly MethodDefinition m_IntPtr_CtorFnDef;
         readonly MethodDefinition m_JobsUtility_CountFromDeferredDataFnDef;
-        readonly TypeDefinition m_JobsUtility_MinMaxDef;
+
+        readonly TypeDefinition m_JobRangesDef;
         readonly FieldDefinition m_JobRanges_ArrayLengthFieldDef;
+
         readonly TypeDefinition m_JobsUtility_ManagedJobDelegateDef;
         readonly MethodDefinition m_JobsUtility_ManagedJobDelegate_CtorFnDef;
+
+        readonly TypeDefinition m_IntPtrDef;
+        readonly MethodDefinition m_IntPtr_CtorFnDef;
+
+        readonly TypeDefinition m_UnsafeUtilityDef;
+        readonly TypeDefinition m_PinvokeCallbackAttribute;
+        readonly TypeDefinition m_JobMetaDataDef;
+        readonly TypeDefinition m_JobsUtility_MinMaxDef;
         readonly TypeDefinition m_JobsUtility_ManagedJobForEachDelegateDef;
+        readonly TypeDefinition m_JobHandleDef;
 
         // types that are found that support DeferredConvertListToArray.  It's really only ever going to
         // be NativeArray.
@@ -92,6 +115,9 @@ namespace Unity.ZeroPlayer
 
         // IJobForEach re-uses types, and we don't want to multiply patch. This just records work done so it isn't re-done.
         HashSet<string> m_Patched = new HashSet<string>();    // TODO delete
+
+        // We will build a contiguous block of job names which can be referred to in job debugger code
+        string m_JobNamesBlob = "UNKNOWN_OBJECT_TYPE\0";
 
         public List<JobDesc> JobDescList = new List<JobDesc>();
         public List<TypeDefinition> TypesToMakePublic = new List<TypeDefinition>();
@@ -110,13 +136,39 @@ namespace Unity.ZeroPlayer
             public TypeReference JobData;
             // If the jobs wraps an inner definition, it is here. (Or null if not.)
             public FieldDefinition JobWrapperField;
+            // Offset into a blob of contiguous job names separated by null for debugging messages.
+            public int ProducerNameBlobOffset;
+        }
+
+        private class SafetyField
+        {
+            internal List<FieldReference> importedField;
+            internal List<FieldReference> importedDynamicReadOnlyField;
+            internal List<FieldReference> importedDynamicReadWriteField;
+            internal bool disableSafety;
+            internal bool writeOnly;
+            internal bool readOnly;
+            internal bool needRelease;
+            internal bool dynamicSafety;
+            internal int nameBlobOffset;
+        }
+
+        private class SafetyFieldInfo
+        {
+            internal List<SafetyField> fields = null;
+            internal int readOnlyStaticCount = 0;
+            internal int writableStaticCount = 0;
+            internal int deallocateCount = 0;
+            internal bool writeErrorIfParallel = false;
         }
 
         // Performs the many assorted tasks to allow Jobs (Custom, Unity, etc.)
         // to run without reflection. The name refers to creating the IJobBase
         // interface (and code-gen of the appropriate methods) for all Jobs.
-        public InterfaceGen(List<AssemblyDefinition> assemblies, bool burstEnabled)
+        public InterfaceGen(List<AssemblyDefinition> assemblies, bool burstEnabled, bool multithreadEnabled)
         {
+            m_MultithreadEnabled = multithreadEnabled;
+
             m_Assemblies = assemblies;
             m_SystemAssembly = assemblies.First(asm => asm.Name.Name == "mscorlib");
             m_ZeroJobsAssembly = assemblies.First(asm => asm.Name.Name == "Unity.ZeroJobs");
@@ -143,17 +195,8 @@ namespace Unity.ZeroPlayer
             m_JobsUtility_ManagedJobDelegate_CtorFnDef = m_JobsUtility_ManagedJobDelegateDef.Methods[0];
             m_JobsUtility_ManagedJobForEachDelegateDef = m_JobsUtilityDef.NestedTypes.First(i => i.Name == "ManagedJobForEachDelegate");
 
-            // Safety system; might not be present in the build if compiled out!
-            m_SafetyHandleDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
-                i.FullName == "Unity.Collections.LowLevel.Unsafe.AtomicSafetyHandle");
-            if (m_SafetyHandleDef != null)
-            {
-                m_SafetyHandle_ReleaseFnDef = m_SafetyHandleDef.Methods.First(i => i.Name == "Release");
-                m_SafetyHandle_PatchLocalFnDef = m_SafetyHandleDef.Methods.First(i => i.Name == "PatchLocal");
-                m_SafetyHandle_AllowWriteOnlyFnDef = m_SafetyHandleDef.Methods.First(i => i.Name == "SetAllowWriteOnly");
-                m_SafetyHandle_AllowReadOnlyFnDef = m_SafetyHandleDef.Methods.First(i => i.Name == "SetAllowReadOnly");
-                m_SafetyHandle_UnpatchLocalFnDef = m_SafetyHandleDef.Methods.First(i => i.Name == "UnpatchLocal");
-            }
+            m_JobHandleDef = m_ZeroJobsAssembly.MainModule.Types.First(i =>
+                i.FullName == "Unity.Jobs.JobHandle");
 
             // Safety system; might not be present in the build if compiled out!
             m_DisposeSentinelDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
@@ -163,13 +206,43 @@ namespace Unity.ZeroPlayer
                 m_DisposeSentinel_ClearFnDef = m_DisposeSentinelDef.Methods.First(i => i.Name == "Clear");
             }
 
+            m_AtomicSafetyHandleDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
+                i.FullName == "Unity.Collections.LowLevel.Unsafe.AtomicSafetyHandle");
+            if (m_AtomicSafetyHandleDef != null)
+            {
+                m_AtomicSafetyHandle_PatchLocalReadOnlyFnDef = m_AtomicSafetyHandleDef.Methods.First(i => i.Name == "PatchLocalReadOnly");
+                m_AtomicSafetyHandle_PatchLocalWriteOnlyFnDef = m_AtomicSafetyHandleDef.Methods.First(i => i.Name == "PatchLocalWriteOnly");
+                m_AtomicSafetyHandle_PatchLocalReadWriteFnDef = m_AtomicSafetyHandleDef.Methods.First(i => i.Name == "PatchLocalReadWrite");
+                m_AtomicSafetyHandle_PatchLocalDynamicFnDef = m_AtomicSafetyHandleDef.Methods.First(i => i.Name == "PatchLocalDynamic");
+                m_AtomicSafetyHandle_ReleasePatchedFnDef = m_AtomicSafetyHandleDef.Methods.First(i => i.Name == "ReleasePatched");
+            }
+
+            m_DependencyValidatorDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
+                i.FullName == "Unity.Development.JobsDebugger.DependencyValidator");
+            if (m_DependencyValidatorDef != null)
+            {
+                m_DependencyValidator_AllocateKnownFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "AllocateKnown");
+                m_DependencyValidator_CleanupFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "Cleanup");
+                m_DependencyValidator_RecordAndSanityCheckReadOnlyFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "RecordAndSanityCheckReadOnly");
+                m_DependencyValidator_RecordAndSanityCheckWritableFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "RecordAndSanityCheckWritable");
+                m_DependencyValidator_RecordDeallocateFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "RecordDeallocate");
+                m_DependencyValidator_RecordAndSanityCheckDynamicFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "RecordAndSanityCheckDynamic");
+                m_DependencyValidator_ValidateScheduleSafetyFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "ValidateScheduleSafety");
+                m_DependencyValidator_ValidateDeferredFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "ValidateDeferred");
+                m_DependencyValidator_ValidateDeallocateOnJobCompletionFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "ValidateDeallocateOnJobCompletion");
+                m_DependencyValidator_UpdateDependenciesFnDef = m_DependencyValidatorDef.Methods.First(i => i.Name == "UpdateDependencies");
+            }
+
             m_IntPtrDef = m_SystemAssembly.MainModule.Types.First(i => i.FullName == "System.IntPtr");
             m_IntPtr_CtorFnDef = m_IntPtrDef.GetConstructors().First(c => c.Parameters.Count == 1 && c.Parameters[0].ParameterType.FullName == "System.Int32");
 
             m_IJobBaseDef = m_ZeroJobsAssembly.MainModule.GetAllTypes().First(i => i.FullName == "Unity.Jobs.IJobBase");
             m_IJobBaseDef.IsPublic = true;
 
-            m_IJobBase_PrepareJobAtScheduleTimeFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_PrepareJobAtScheduleTimeFn);
+            m_IJobBase_PrepareJobAtPreScheduleTimeFnDef = m_IJobBaseDef.Methods.Any(m => m.Name == k_PrepareJobAtPreScheduleTimeFn) ?
+                m_IJobBaseDef.Methods.First(m => m.Name == k_PrepareJobAtPreScheduleTimeFn) : null;
+            m_IJobBase_PrepareJobAtPostScheduleTimeFnDef = m_IJobBaseDef.Methods.Any(m => m.Name == k_PrepareJobAtPostScheduleTimeFn) ?
+                m_IJobBaseDef.Methods.First(m => m.Name == k_PrepareJobAtPostScheduleTimeFn) : null;
             m_IJobBase_PrepareJobAtExecuteTimeFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_PrepareJobAtExecuteTimeFn);
             m_IJobBase_CleanupJobFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_CleanupJobFn);
             m_IJobBase_IsBurstedFnDef = m_IJobBaseDef.Methods.First(m => m.Name == k_IsBursted);
@@ -182,10 +255,15 @@ namespace Unity.ZeroPlayer
             FindAllInterestingTypes();
         }
 
-        // Is the safety system enabled?  If it isn't, we won't have a type definition for safety handles.
+        // Is the safety system enabled?  If it isn't, we won't have a type definition for Jobs Debugger.
         bool SafetySystemEnabled()
         {
-            return m_SafetyHandleDef != null;
+            return m_AtomicSafetyHandleDef != null;
+        }
+
+        bool MultithreadingEnabled()
+        {
+            return m_MultithreadEnabled;
         }
 
         // Scans all types and pulls out interesting ones:
@@ -218,6 +296,7 @@ namespace Unity.ZeroPlayer
                         jobDesc.JobProducer = producer;
                         jobDesc.JobProducerDef = producer.Resolve();
                         jobDesc.JobInterface = type;
+                        jobDesc.ProducerNameBlobOffset = AddJobDebuggerString(type.FullName);
 
                         TypeReference jobData = executeMethod.Parameters[k_ExecuteJobParam].ParameterType.GetElementType();
 
@@ -306,64 +385,6 @@ namespace Unity.ZeroPlayer
             return producer;
         }
 
-        void GenerateProducerScheduleFn(ModuleDefinition module, JobDesc jobDesc)
-        {
-            MethodDefinition scheduleFn = new MethodDefinition(k_ProducerScheduleFn,
-                MethodAttributes.Public | MethodAttributes.Static,
-                module.ImportReference(typeof(int)));
-
-            scheduleFn.Body.InitLocals = true;
-            var il = scheduleFn.Body.GetILProcessor();
-
-            if (jobDesc.JobWrapperField != null)
-            {
-                var paramType = jobDesc.JobWrapperField.DeclaringType.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
-
-                var wrapperParam = new ParameterDefinition("wrapper", ParameterAttributes.None,
-                    module.ImportReference(paramType.MakeByReferenceType()));
-                scheduleFn.Parameters.Add(wrapperParam);
-
-                var genericJobData = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
-                var genericJobDataRef = module.ImportReference(genericJobData);
-
-                AddSafetyIL(scheduleFn, module.Assembly, genericJobDataRef, null);
-            }
-            il.Emit(OpCodes.Ldc_I4, k_ProducerScheduleReturnValue);
-            il.Emit(OpCodes.Ret);
-
-            jobDesc.JobProducerDef.Methods.Add(scheduleFn);
-        }
-
-        void GenerateProducerPatchMinMaxFn(ModuleDefinition module, JobDesc jobDesc)
-        {
-            MethodDefinition minMaxFn = new MethodDefinition(k_ProducerPatchMinMaxFn,
-                MethodAttributes.Public | MethodAttributes.Static,
-                module.ImportReference(typeof(void)));
-
-            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None, module.ImportReference(m_JobsUtility_MinMaxDef));
-
-            minMaxFn.Body.InitLocals = true;
-            var il = minMaxFn.Body.GetILProcessor();
-
-            if (jobDesc.JobWrapperField != null)
-            {
-                var paramType = jobDesc.JobWrapperField.DeclaringType.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
-
-                var wrapperParam = new ParameterDefinition("wrapper", ParameterAttributes.None,
-                    module.ImportReference(paramType.MakeByReferenceType()));
-                minMaxFn.Parameters.Add(wrapperParam);
-
-                var genericJobData = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
-                var genericJobDataRef = module.ImportReference(genericJobData);
-
-                AddMinMaxIL(minMaxFn, module.Assembly, minMaxParam, genericJobDataRef, null);
-            }
-
-            il.Emit(OpCodes.Ret);
-            minMaxFn.Parameters.Add(minMaxParam);
-            jobDesc.JobProducerDef.Methods.Add(minMaxFn);
-        }
-
         void EmitJobPointers(ModuleDefinition module, ILProcessor il, ParameterDefinition metaPtrParam, VariableDefinition metaPtrVar, ParameterDefinition jobIndexParam, VariableDefinition jobDataPtr)
         {
             // void* jobDataPtr = jobMetaPtr + sizeof(JobMetaData) + jobIndex * jobMetaPtr->size
@@ -380,7 +401,17 @@ namespace Unity.ZeroPlayer
             if (jobIndexParam == null)
                 il.Emit(OpCodes.Ldc_I4_0);
             else
+            {
+                // If jobIndex < 0, add 1 (so -1 becomes 0). Otherwise use as is
+                // We don't produce jobIndex < -1
+                //
+                // (jobIndex + (jobIndex >> 31)
                 il.Emit(OpCodes.Ldarg, jobIndexParam);
+                il.Emit(OpCodes.Ldarg, jobIndexParam);
+                il.Emit(OpCodes.Ldc_I4, 31);
+                il.Emit(OpCodes.Shr_Un);
+                il.Emit(OpCodes.Add);
+            }
 
             if (metaPtrVar != null)
                 il.Emit(OpCodes.Ldloc, metaPtrVar);
@@ -406,7 +437,7 @@ namespace Unity.ZeroPlayer
 
         // Generates the ProducerExecuteFn which wraps the user Execute, to
         // pass down job data structure.
-        void GenerateProducerExecuteFn(ModuleDefinition module, JobDesc jobDesc)
+        void GenerateProducerExecuteFn(ModuleDefinition module, JobDesc jobDesc, SafetyFieldInfo safetyFields)
         {
             /*
              * types from other assemblies need to be able to reach into this type and grab its generated execute method
@@ -447,10 +478,9 @@ namespace Unity.ZeroPlayer
 
             EmitJobPointers(module, il, metaPtrParam, null, jobIndexParam, jobDataPtr);
 
-            // The JobRanges are needed *per thread*. GetWorkStealingRange will modify the JobRanges
-            // as it does work. Not obvious: the JobRanges are stored as the first thing in the metaData,
-            // so the metaDataPtr is a pointer to the jobRanges.
-            // Make a stack copy:
+            // GetWorkStealingRange will modify the job worker's local JobRanges as it does work.
+            // Not obvious: the JobRanges are stored as the first thing in the metaData.
+            // JobRanges jobRanges = *(JobRanges*)jobMetaPtr;
             il.Emit(OpCodes.Ldarg, metaPtrParam);
             il.Emit(OpCodes.Ldobj, module.ImportReference(m_JobRangesDef));
             il.Emit(OpCodes.Stloc, stackJobRange);
@@ -478,6 +508,9 @@ namespace Unity.ZeroPlayer
             il.Emit(OpCodes.Stfld, module.ImportReference(m_JobRanges_ArrayLengthFieldDef));
 
             il.Append(branchTarget);
+
+            if (SafetySystemEnabled())
+                AddPatchSafetyIL(executeGen, module.Assembly, jobDataPtr, safetyFields);
 
             // Execute(ref jobData, new IntPtr(0), new IntPtr(0), ref ranges, jobIndex);
             il.Emit(OpCodes.Ldloc, jobDataPtr);
@@ -556,7 +589,7 @@ namespace Unity.ZeroPlayer
             il.Emit(OpCodes.Callvirt, module.ImportReference(methodToCall));
         }
 
-        void GenerateProducerCleanupFn(ModuleDefinition module, JobDesc jobDesc)
+        void GenerateProducerCleanupFn(ModuleDefinition module, JobDesc jobDesc, SafetyFieldInfo safetyFields)
         {
             MethodDefinition cleanupFn = new MethodDefinition(k_ProducerCleanupFn,
                 MethodAttributes.Public | MethodAttributes.Static,
@@ -643,7 +676,9 @@ namespace Unity.ZeroPlayer
 
             if (jobDesc.JobWrapperField != null)
             {
-                GenCleanupSafetyIL(cleanupFn, module.Assembly, jobDesc.JobData.Resolve(), jobDataPtrVar);
+                // Cleanup Job Producer safety handles immediately after execute has finished all workers.
+                if (SafetySystemEnabled())
+                    GenCleanupSafetyIL(cleanupFn, module.Assembly, jobDataPtrVar, safetyFields);
                 GenWrapperDeallocateIL(cleanupFn, module.Assembly, jobDesc.JobData.Resolve(), jobDataPtrVar);
             }
 
@@ -725,7 +760,7 @@ namespace Unity.ZeroPlayer
 
             // JobsUtility.PatchBufferMinMaxRanges(IntPtr.Zero, UnsafeUtility.AddressOf(ref jobParallelForProducer), begin, end - begin);
             // --> ProducerPatchMinMaxFn_Gen(minMax, ref jobParallelForProducer);
-            // --> jobParallelForProducer.JobData.Patch(minMax);
+            // --> jobParallelForProducer.JobData.PatchMinMax(minMax);
 
             // Hybrid doesn't have the MinMax return, but DOTS Runtime does, so no one can ever use it.
             // Remove() the Pop so we can use the minMax.
@@ -771,50 +806,58 @@ namespace Unity.ZeroPlayer
             inst.Operand = null;
         }
 
-        static void EmitCallJobBaseMethod(ModuleDefinition module, ILProcessor il, JobDesc jobDesc, MethodDefinition context, Instruction callInstruction, ParameterDefinition jobDataParam, VariableDefinition jobDataVar, MethodDefinition call)
+        static void EmitCallJobBaseMethod(ModuleDefinition module, ILProcessor il, JobDesc jobDesc, MethodDefinition context,
+            Instruction insertBeforeInstruction, ParameterDefinition jobDataParam, VariableDefinition jobDataVar,
+            IEnumerable<Instruction> argLoads, MethodDefinition call)
         {
-            // data.UserJobData.PrepareJobAtScheduleTimeFn_Gen()
+            // data.UserJobData.PrepareJobAt[Pre/Post]ScheduleTimeFn_Gen()
             // OR
-            // data.PrepareJobAtScheduleTimeFn_Gen()
+            // data.PrepareJobAt[Pre/Post]ScheduleTimeFn_Gen()
             if (jobDesc.JobWrapperField == null)
             {
                 if (context.Parameters[0].ParameterType.IsByReference)
-                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarg, context.Parameters[0]));
+                    il.InsertBefore(insertBeforeInstruction, Instruction.Create(OpCodes.Ldarg, context.Parameters[0]));
                 else
-                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarga, context.Parameters[0]));
+                    il.InsertBefore(insertBeforeInstruction, Instruction.Create(OpCodes.Ldarga, context.Parameters[0]));
             }
             else
             {
                 if (jobDataParam != null)
                 {
-                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarga, jobDataParam));
+                    il.InsertBefore(insertBeforeInstruction, Instruction.Create(OpCodes.Ldarga, jobDataParam));
                 }
                 else
                 {
-                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jobDataVar));
+                    il.InsertBefore(insertBeforeInstruction, Instruction.Create(OpCodes.Ldloca, jobDataVar));
                 }
 
                 TypeDefinition userDataFD = jobDesc.JobWrapperField.DeclaringType;
                 var arr = MakeGenericArgsArray(module, userDataFD, context.GenericParameters);
 
-                il.InsertBefore(callInstruction,
+                il.InsertBefore(insertBeforeInstruction,
                     Instruction.Create(OpCodes.Ldflda,
                         module.ImportReference(
                             TypeRegGen.MakeGenericFieldSpecialization(jobDesc.JobWrapperField, arr))));
             }
 
+            if (argLoads != null)
+                il.InsertBefore(insertBeforeInstruction, argLoads);
+
             // The first generic parameter is always the user Job, which is where the IJobBase has been attached.
             TypeReference constraintTypeRef = module.ImportReference(context.GenericParameters[0]);
 
-            il.InsertBefore(callInstruction,
+            il.InsertBefore(insertBeforeInstruction,
                 Instruction.Create(OpCodes.Constrained, constraintTypeRef));
 
-            il.InsertBefore(callInstruction,
+            il.InsertBefore(insertBeforeInstruction,
                 Instruction.Create(OpCodes.Callvirt, module.ImportReference(call)));
         }
 
-        // Patches the Schedule method to add the size, and call the IJobBase.PrepareJobAtScheduleTimeFn_Gen
-        void PatchJobSchedule(ModuleDefinition module, JobDesc jobDesc)
+        // Patches the Schedule method to add the size, check if the job is Bursted, and call
+        //   IJobBase.PrepareJobAtPreScheduleTimeFn_Gen and
+        //   IJobBase.PrepareJobAtPostScheduleTimeFn_Gen
+        // if the safety system is enabled
+        void PatchJobSchedule(ModuleDefinition module, JobDesc jobDesc, SafetyFieldInfo safetyFields)
         {
             TypeDefinition parent = jobDesc.JobProducerDef.DeclaringType ?? jobDesc.JobProducerDef;
 
@@ -826,12 +869,48 @@ namespace Unity.ZeroPlayer
 
                 method.Body.SimplifyMacros();
                 var bc = method.Body.Instructions;
+
+                // We need to know if it is a deferred array based job before writing pre-schedule code so we can
+                // validate the deferred data itself.
+                List<Instruction> deferredArgOps = null;
+                for (int i = 0; i < bc.Count; ++i)
+                {
+                    if (bc[i].OpCode != OpCodes.Call)
+                        continue;
+
+                    if (((MethodReference)bc[i].Operand).FullName.Contains(
+                        "Unity.Jobs.LowLevel.Unsafe.JobsUtility::ScheduleParallelForDeferArraySize"))
+                    {
+                        FindPrevArg(bc, i - 1, out var firstI, out var lastI);
+                        deferredArgOps = bc.ToList().GetRange(firstI, lastI - firstI + 1);
+                        break;
+                    }
+                }
+
                 Instruction lastProcessed = null;
+
+                // These will be found when generating pre-schedule IL and reused in post-schedule IL
+                ParameterDefinition jobDataParam = null;
+                VariableDefinition jobDataVar = null;
+                TypeReference jobDataTR = null;
+                VariableDefinition jobsDebuggerInfoVar = null;
+                VariableDefinition scheduledJobVar = null;
+                VariableDefinition scheduledJobDependsVar = null;
+                if (SafetySystemEnabled())
+                {
+                    jobsDebuggerInfoVar = new VariableDefinition(module.ImportReference(m_DependencyValidatorDef));
+                    method.Body.Variables.Add(jobsDebuggerInfoVar);
+                    scheduledJobVar = new VariableDefinition(module.ImportReference(m_JobHandleDef));
+                    method.Body.Variables.Add(scheduledJobVar);
+                    scheduledJobDependsVar = new VariableDefinition(module.ImportReference(m_JobHandleDef));
+                    method.Body.Variables.Add(scheduledJobDependsVar);
+                }
 
                 for (int i = 0; i < bc.Count; ++i)
                 {
                     if (bc[i].OpCode != OpCodes.Call)
                         continue;
+
                     if (((MethodReference)bc[i].Operand).FullName.Contains(
                         "Unity.Jobs.LowLevel.Unsafe.JobsUtility/JobScheduleParameters::.ctor"))
                     {
@@ -839,35 +918,73 @@ namespace Unity.ZeroPlayer
                             continue;
                         lastProcessed = bc[i];
 
-                        const int kSizeOffset = 4;
-                        const int kProducerPrepareOffset = 3;
-                        const int kUserPrepareOffset = 2;
-                        const int kIsBurstedOffset = 1;
-
-                        Instruction sizeOffsetInstruction = bc[i - kSizeOffset];
-                        Instruction producerPrepareInstruction = bc[i - kProducerPrepareOffset];
-                        Instruction userPrepareInstruction = bc[i - kUserPrepareOffset];
-                        Instruction isBurstedInstruction = bc[i - kIsBurstedOffset];
                         Instruction callInstruction = bc[i];
 
-                        // Magic flags value from the default parameter to help find the byte code.
+                        // Prior to JobScheduleParameters, we want to insert code for pre-schedule validation and setup
+                        // 1 - Find the arguments we want to replace with code gen
+                        if (!FindPrevArg(bc, i - 1, out var defArgFirstI, out var defArgLastI) || defArgFirstI != defArgLastI)
+                            throw new Exception("Could not find expected burst argument in IL code");
+                        Instruction isBurstedInstruction = bc[defArgFirstI];
+
+                        Instruction userPrepareInstruction = null;
+                        Instruction producerPrepareInstruction = null;
+                        if (SafetySystemEnabled())
+                        {
+                            if (!FindPrevArg(bc, defArgFirstI - 1, out defArgFirstI, out defArgLastI) || defArgFirstI != defArgLastI)
+                                throw new Exception("Could not find expected job preschedule argument in IL code");
+                            userPrepareInstruction = bc[defArgFirstI];
+
+                            if (!FindPrevArg(bc, defArgFirstI - 1, out defArgFirstI, out defArgLastI) || defArgFirstI != defArgLastI)
+                                throw new Exception("Could not find expected producer preschedule argument in IL code");
+                            producerPrepareInstruction = bc[defArgFirstI];
+                        }
+
+                        if (!FindPrevArg(bc, defArgFirstI - 1, out defArgFirstI, out defArgLastI) || defArgFirstI != defArgLastI)
+                            throw new Exception("Could not find expected size offset argument in IL code");
+                        Instruction sizeOffsetInstruction = bc[defArgFirstI];
+
+                        // We'll also use the jobs dependency argument during validation so save it for later
+                        if (!FindPrevArg(bc, defArgFirstI - 1, out defArgFirstI, out defArgLastI))
+                            throw new Exception("Could not find schedule mode argument in IL code");
+                        if (!FindPrevArg(bc, defArgFirstI - 1, out var argJobDependsFirst, out var argJobDependsLast))
+                            throw new Exception("Could not find job dependency handle argument in IL code");
+
+                        // 2 - Check magic flags value from the default parameters to confirm the correct byte code.
                         if (!(sizeOffsetInstruction.OpCode == OpCodes.Ldc_I4 && (int)sizeOffsetInstruction.Operand == 0))
                             throw new Exception(
                                 $"Expected to find default 0 value for size in JobScheduleParameters when processing '{method.FullName}'");
-                        if (!(producerPrepareInstruction.OpCode == OpCodes.Ldc_I4 && (int)producerPrepareInstruction.Operand == 1))
-                            throw new Exception($"Unexpected default value in '{method.FullName}'");
-                        if (!(userPrepareInstruction.OpCode == OpCodes.Ldc_I4 && (int)userPrepareInstruction.Operand == 3))
-                            throw new Exception($"Unexpected default value in '{method.FullName}'");
+                        if (SafetySystemEnabled())
+                        {
+                            if (!(producerPrepareInstruction.OpCode == OpCodes.Ldc_I4 && (int)producerPrepareInstruction.Operand == 1))
+                                throw new Exception($"Unexpected default value in '{method.FullName}'");
+                            if (!(userPrepareInstruction.OpCode == OpCodes.Ldc_I4 && (int)userPrepareInstruction.Operand == 3))
+                                throw new Exception($"Unexpected default value in '{method.FullName}'");
+                        }
                         if (!(isBurstedInstruction.OpCode == OpCodes.Ldc_I4 && (int)isBurstedInstruction.Operand == 5))
                             throw new Exception($"Unexpected default value in '{method.FullName}'");
 
-                        // Destroy the const load; they will become method calls.
+                        // 3 - Destroy the const load; they will become method calls with codegen'd initialization.
                         ConvertToNoOp(sizeOffsetInstruction);
-                        ConvertToNoOp(producerPrepareInstruction);
-                        ConvertToNoOp(userPrepareInstruction);
+                        if (SafetySystemEnabled())
+                        {
+                            ConvertToNoOp(producerPrepareInstruction);
+                            ConvertToNoOp(userPrepareInstruction);
+                        }
                         ConvertToNoOp(isBurstedInstruction);
 
                         ILProcessor il = method.Body.GetILProcessor();
+
+                        // Find the job handle representing dependencies in the user schedule function
+                        // It could be passed as parameter, or it could be default JobHandle, or it could be a member of the job struct data,
+                        // or it could be determined by another scheduled job inside a custom schedule, etc. Because it could come from
+                        // anywhere (there is no consistently constrained pattern in current jobs code) we will have to reverse engineer
+                        // it from the call to JobScheduleParameters.ctor
+
+                        if (SafetySystemEnabled())
+                        {
+                            il.InsertAfter(bc[argJobDependsLast], Instruction.Create(OpCodes.Stloc, scheduledJobDependsVar));
+                            il.InsertAfter(bc[argJobDependsLast + 1], Instruction.Create(OpCodes.Ldloc, scheduledJobDependsVar));
+                        }
 
                         // Patch the size argument into a SizeOf
                         // Note this replaces one bytecode with another, so we haven't mutated the array/list
@@ -894,90 +1011,131 @@ namespace Unity.ZeroPlayer
                         // jobDataTR. Needs to be cleaned up.
 
                         // The jobData can be a local or a parameter; go find it.
-                        ParameterDefinition jobDataParam = null;
-                        VariableDefinition jobDataVar = null;
-                        TypeReference jobDataTR = null;
+                        // The parameter to AddressOf() is the parameter or local we want to load.
+                        for (int j = i - 1; j > 0; --j)
                         {
-                            // The parameter to AddressOf() is the parameter or local we want to load.
-                            for (int j = i - 1; j > 0; --j)
+                            if (bc[j].OpCode == OpCodes.Call &&
+                                ((MethodReference)bc[j].Operand).Name == "AddressOf")
                             {
-                                if (bc[j].OpCode == OpCodes.Call &&
-                                    ((MethodReference)bc[j].Operand).Name == "AddressOf")
+                                var instr = bc[j - 1];
+                                if (instr.OpCode == OpCodes.Ldarg_0)
                                 {
-                                    var instr = bc[j - 1];
-                                    if (instr.OpCode == OpCodes.Ldarg_0)
+                                    // This case will occur if the job is passed in by reference.
+                                    // Surprisingly rare, since it is arguably the best approach.
+                                    jobDataParam = method.Parameters[0];
+                                    jobDataTR = jobDataParam.ParameterType;
+                                }
+                                else if (instr.Operand is ParameterDefinition)
+                                {
+                                    jobDataParam = (ParameterDefinition)instr.Operand;
+                                    jobDataTR = jobDataParam.ParameterType;
+                                }
+                                else if (instr.Operand is VariableDefinition)
+                                {
+                                    jobDataVar = (VariableDefinition)instr.Operand;
+                                    jobDataTR = jobDataVar.VariableType;
+                                }
+
+                                break;
+                            }
+                        }
+
+                        if (jobDataParam == null && jobDataVar == null)
+                            throw new ArgumentException($"Expected to find AddressOf call in JobSchedule parameters while looking at `{method.FullName}'");
+
+                        // Pre schedule processing is only necessary with the safety system
+                        if (SafetySystemEnabled())
+                        {
+                            List<Instruction> preScheduleArgLoads = new List<Instruction>
+                            {
+                                Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar),
+                                Instruction.Create(OpCodes.Ldloca, scheduledJobDependsVar),
+                                Instruction.Create(OpCodes.Ldnull),
+                            };
+
+                            il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar));
+                            il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Initobj, module.ImportReference(m_DependencyValidatorDef)));
+
+                            // Patch the last 2 parameters to call:
+                            // JobProducer: ProducerPreScheduleFn_Gen
+                            // UserJob:     PrepareJobAtPreScheduleTimeFn_Gen
+                            // Add new instructions before the call:
+                            {
+                                // CustomJobProcess<T>.ProducerPreScheduleFn_Gen(ref data, ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle);    // if there is a job wrapper
+                                // OR
+                                // insert constant 4   // if there isn't a job wrapper or the call is unsupported.
+                                if (jobDesc.JobWrapperField == null)
+                                {
+                                    // No wrapper - just insert the constant.
+                                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldc_I4_4));
+                                }
+                                else
+                                {
+                                    var md = jobDesc.JobProducer.Resolve().Methods.First(f => f.Name == k_ProducerPreScheduleFn);
+                                    if (jobDataParam != null)
                                     {
-                                        // This case will occur if the job is passed in by reference.
-                                        // Surprisingly rare, since it is arguably the best approach.
-                                        jobDataParam = method.Parameters[0];
-                                        jobDataTR = jobDataParam.ParameterType;
+                                        il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarga, jobDataParam));
                                     }
-                                    else if (instr.Operand is ParameterDefinition)
+                                    else
                                     {
-                                        jobDataParam = (ParameterDefinition)instr.Operand;
-                                        jobDataTR = jobDataParam.ParameterType;
-                                    }
-                                    else if (instr.Operand is VariableDefinition)
-                                    {
-                                        jobDataVar = (VariableDefinition)instr.Operand;
-                                        jobDataTR = jobDataVar.VariableType;
+                                        il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jobDataVar));
                                     }
 
-                                    break;
+                                    il.InsertBefore(callInstruction, preScheduleArgLoads);
+
+                                    if (jobDataTR.IsGenericInstance)
+                                    {
+                                        GenericInstanceType instance = (GenericInstanceType)jobDataTR;
+                                        IList<TypeReference> genericArguments = instance.GenericArguments;
+                                        var mdClosed = md.MakeHostInstanceGeneric(genericArguments.ToArray());
+                                        il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Call, module.ImportReference(mdClosed)));
+                                    }
+                                    else
+                                    {
+                                        il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Call, module.ImportReference(md)));
+                                    }
                                 }
                             }
 
-                            if (jobDataParam == null && jobDataVar == null)
-                                throw new ArgumentException($"Expected to find AddressOf call in JobSchedule parameters while looking at `{method.FullName}'");
-                        }
-
-                        // Patch the last 2 parameters to call:
-                        // JobProducer: ProducerScheduleFn_Gen
-                        // UserJob:     PrepareJobAtScheduleTimeFn_Gen
-                        // Add new instructions before the call:
-                        {
-                            // CustomJobProcess<T>.ProducerScheduleFn_Gen(ref data);    // if there is a job wrapper
+                            // data.UserJobData.PrepareJobAtPreScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle)
                             // OR
-                            // insert constant 4   // if there isn't a job wrapper or the call is unsupported.
-                            if (jobDesc.JobWrapperField == null)
+                            // data.PrepareJobAtPreScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref dependsOn, deferredSafetyHandle)
+                            if (deferredArgOps != null)
                             {
-                                // No wrapper - just insert the constant.
-                                il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldc_I4_4));
+                                preScheduleArgLoads.RemoveAt(preScheduleArgLoads.Count - 1);
+                                preScheduleArgLoads.AddRange(deferredArgOps);
                             }
-                            else
-                            {
-                                var md = jobDesc.JobProducer.Resolve().Methods.First(f => f.Name == k_ProducerScheduleFn);
-                                if (jobDataParam != null)
-                                {
-                                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldarga, jobDataParam));
-                                }
-                                else
-                                {
-                                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Ldloca, jobDataVar));
-                                }
-
-                                if (jobDataTR.IsGenericInstance)
-                                {
-                                    GenericInstanceType instance = (GenericInstanceType)jobDataTR;
-                                    IList<TypeReference> genericArguments = instance.GenericArguments;
-                                    var mdClosed = md.MakeHostInstanceGeneric(genericArguments.ToArray());
-                                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Call, module.ImportReference(mdClosed)));
-                                }
-                                else
-                                {
-                                    il.InsertBefore(callInstruction, Instruction.Create(OpCodes.Call, module.ImportReference(md)));
-                                }
-                            }
-                        }
-                        // data.UserJobData.PrepareJobAtScheduleTimeFn_Gen()
-                        // OR
-                        // data.PrepareJobAtScheduleTimeFn_Gen()
-                        EmitCallJobBaseMethod(module, il, jobDesc, method, callInstruction, jobDataParam, jobDataVar, m_IJobBase_PrepareJobAtScheduleTimeFnDef);
+                            EmitCallJobBaseMethod(module, il, jobDesc, method, callInstruction, jobDataParam, jobDataVar, preScheduleArgLoads, m_IJobBase_PrepareJobAtPreScheduleTimeFnDef);
+                        }  // SafetySystemEnabled()
 
                         // data.UserJobData.IsBursted()
                         // OR
                         // data.IsBursted()
-                        EmitCallJobBaseMethod(module, il, jobDesc, method, callInstruction, jobDataParam, jobDataVar, m_IJobBase_IsBurstedFnDef);
+                        EmitCallJobBaseMethod(module, il, jobDesc, method, callInstruction, jobDataParam, jobDataVar, null, m_IJobBase_IsBurstedFnDef);
+                    }
+                    else if (((MethodReference)bc[i].Operand).FullName.Contains(
+                        "Unity.Jobs.LowLevel.Unsafe.JobsUtility::Schedule"))
+                    {
+                        // Post schedule processing is only necessary with the safety system
+                        if (SafetySystemEnabled())
+                        {
+                            ILProcessor il = method.Body.GetILProcessor();
+                            Instruction nextInstruction = bc[i + 1];
+
+                            il.InsertBefore(nextInstruction, Instruction.Create(OpCodes.Stloc, scheduledJobVar));
+                            il.InsertBefore(nextInstruction, Instruction.Create(OpCodes.Ldloc, scheduledJobVar));  // Make sure it stays on stack at the expected place
+
+                            Instruction[] postScheduleArgLoads = new Instruction[]
+                            {
+                                Instruction.Create(OpCodes.Ldloca, jobsDebuggerInfoVar),
+                                Instruction.Create(OpCodes.Ldloca, scheduledJobVar),
+                            };
+
+                            // data.UserJobData.PrepareJobAtPostScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref newJobHandle)
+                            // OR
+                            // data.PrepareJobAtPostScheduleTimeFn_Gen(ref jobsDebuggerInfo, ref newJobHandle)
+                            EmitCallJobBaseMethod(module, il, jobDesc, method, nextInstruction, jobDataParam, jobDataVar, postScheduleArgLoads, m_IJobBase_PrepareJobAtPostScheduleTimeFnDef);
+                        }
                     }
                 }
 
@@ -1092,14 +1250,28 @@ namespace Unity.ZeroPlayer
             {
                 var module = jobDesc.JobInterface.Module;
 
-                GenerateProducerScheduleFn(module, jobDesc);
-                GenerateProducerCleanupFn(module, jobDesc);
+                TypeReference genericJobProducerTypeRef = null;
+                SafetyFieldInfo producerSafetyFields = null;
+
+                if (jobDesc.JobWrapperField != null)
+                {
+                    var genericJobData = jobDesc.JobData.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+                    genericJobProducerTypeRef = module.ImportReference(genericJobData);
+
+                    if (SafetySystemEnabled())
+                        producerSafetyFields = GatherSafetyFields(module.Assembly, genericJobProducerTypeRef);
+                }
+
+                if (SafetySystemEnabled())
+                    GenerateProducerPreScheduleFn(module, jobDesc, genericJobProducerTypeRef, producerSafetyFields, jobDesc.ProducerNameBlobOffset);
+
+                GenerateProducerCleanupFn(module, jobDesc, producerSafetyFields);
                 // ExecuteFn calls CleanupFn, so generate CleanupFn first.
-                GenerateProducerExecuteFn(module, jobDesc);
-                GenerateProducerPatchMinMaxFn(module, jobDesc);
+                GenerateProducerExecuteFn(module, jobDesc, producerSafetyFields);
+                GenerateProducerPatchMinMaxFn(module, jobDesc, genericJobProducerTypeRef);
 
                 PatchProducerExecute(module, jobDesc);
-                PatchJobSchedule(module, jobDesc);
+                PatchJobSchedule(module, jobDesc, producerSafetyFields);
                 PatchCreateJobReflection(module, jobDesc);
                 PatchMinMaxRangeCall(module, jobDesc);
             }
@@ -1182,9 +1354,18 @@ namespace Unity.ZeroPlayer
 
                         type.Interfaces.Add(
                             new InterfaceImplementation(type.Module.ImportReference(m_IJobBaseDef)));
-                        type.Methods.Add(GenScheduleMethod(asm, type));
-                        type.Methods.Add(GenExecuteMethod(asm, type));
-                        type.Methods.Add(GenCleanupMethod(asm, type, null));
+
+                        SafetyFieldInfo safetyFields = null;
+
+                        if (SafetySystemEnabled())
+                        {
+                            int nameBlobOffset = AddJobDebuggerString(type.FullName);
+                            safetyFields = GatherSafetyFields(asm, type);
+                            type.Methods.Add(GenPreScheduleMethod(asm, type, safetyFields, nameBlobOffset));
+                            type.Methods.Add(GenPostScheduleMethod(asm, type, safetyFields, nameBlobOffset));
+                        }
+                        type.Methods.Add(GenExecuteMethod(asm, type, safetyFields));
+                        type.Methods.Add(GenCleanupMethod(asm, type, safetyFields));
                         type.Methods.Add(GenIsBurstedMethod(asm, type));
                         type.Methods.Add(GenPatchMinMaxMethod(asm, type));
 
@@ -1334,56 +1515,6 @@ namespace Unity.ZeroPlayer
             return method;
         }
 
-        MethodDefinition GenScheduleMethod(
-            AssemblyDefinition asm,
-            TypeDefinition jobTypeDef)
-        {
-            var method = new MethodDefinition(k_PrepareJobAtScheduleTimeFn,
-                MethodAttributes.Public |
-                MethodAttributes.HideBySig |
-                MethodAttributes.NewSlot |
-                MethodAttributes.Virtual,
-                asm.MainModule.ImportReference(typeof(int)));
-
-            // -------- Parameters ---------
-            method.Body.InitLocals = true;
-            ILProcessor il = method.Body.GetILProcessor();
-
-            AddSafetyIL(method, asm, jobTypeDef, null);
-
-            // Magic number "2" is returned so that we can check (at run time) that code-gen actually occured.
-            il.Emit(OpCodes.Ldc_I4, k_UserScheduleReturnValue);
-            il.Emit(OpCodes.Ret);
-            method.Body.Optimize();
-            return method;
-        }
-
-        MethodDefinition GenPatchMinMaxMethod(
-            AssemblyDefinition asm,
-            TypeDefinition jobTypeDef)
-        {
-            var method = new MethodDefinition(k_PatchMinMax,
-                MethodAttributes.Public |
-                MethodAttributes.HideBySig |
-                MethodAttributes.NewSlot |
-                MethodAttributes.Virtual,
-                asm.MainModule.ImportReference(typeof(void)));
-
-            TypeDefinition minMaxTD = m_JobsUtilityDef.NestedTypes.First(n => n.Name == "MinMax");
-            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None, asm.MainModule.ImportReference(minMaxTD));
-            method.Parameters.Add(minMaxParam);
-
-            // -------- Parameters ---------
-            method.Body.InitLocals = true;
-            ILProcessor il = method.Body.GetILProcessor();
-
-            AddMinMaxIL(method, asm, minMaxParam, jobTypeDef, null);
-
-            il.Emit(OpCodes.Ret);
-            method.Body.Optimize();
-            return method;
-        }
-
         MethodDefinition FindDeallocate(TypeDefinition td)
         {
             var deallocMethodDef = td.Methods.FirstOrDefault(m => m.Name == "Deallocate" && m.Parameters.Count == 0);
@@ -1395,7 +1526,8 @@ namespace Unity.ZeroPlayer
 
         MethodDefinition GenExecuteMethod(
             AssemblyDefinition asm,
-            TypeDefinition jobTypeDef)
+            TypeDefinition jobTypeDef,
+            SafetyFieldInfo safetyFields)
         {
             var method = new MethodDefinition(k_PrepareJobAtExecuteTimeFn,
                 MethodAttributes.Public |
@@ -1413,6 +1545,8 @@ namespace Unity.ZeroPlayer
             var bc = method.Body.Instructions;
 
             EmitPatchDeferredListArraysIL(method, asm, jobTypeDef);
+            if (SafetySystemEnabled())
+                AddPatchSafetyIL(method, asm, null, safetyFields);
             AddThreadIndexIL(method, asm, jobTypeDef);
 
             bc.Add(Instruction.Create(OpCodes.Ret));
@@ -1519,7 +1653,7 @@ namespace Unity.ZeroPlayer
         MethodDefinition GenCleanupMethod(
             AssemblyDefinition asm,
             TypeDefinition jobTypeDef,
-            JobDesc jobDesc)
+            SafetyFieldInfo safetyFields)
         {
             var method = new MethodDefinition(k_CleanupJobFn,
                 MethodAttributes.Public |
@@ -1532,7 +1666,11 @@ namespace Unity.ZeroPlayer
             var bc = method.Body.Instructions;
 
             GenCleanupDeallocateIL(method, asm, jobTypeDef);
-            GenCleanupSafetyIL(method, asm, jobTypeDef, null);
+
+            // In multithreaded builds, we cleanup safety handles immediately after execute has finished all workers.
+            // The ordering is different in single thread builds where execute happens on schedule.
+            if (SafetySystemEnabled() && MultithreadingEnabled())
+                GenCleanupSafetyIL(method, asm, null, safetyFields);
 
             bc.Add(Instruction.Create(OpCodes.Ret));
             return method;
@@ -1563,8 +1701,219 @@ namespace Unity.ZeroPlayer
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldflda, importedFieldPath.GetRange(0, importedFieldPath.Count - 1));
                 il.Emit(OpCodes.Ldarg, paramJobIndex);
+                il.Emit(OpCodes.Ldc_I4_1);
+                il.Emit(OpCodes.Add);
                 il.Emit(OpCodes.Stfld, importedFieldPath.Last());
             }
+        }
+
+
+
+        //---------------------------------------------------------------------------------------------------
+        // Safety System Code Gen
+        // None of this affects the output if the safety system is not
+        // enabled through ENABLE_UNITY_COLLECTIONS_CHECKS
+        //---------------------------------------------------------------------------------------------------
+
+
+        public int AddJobDebuggerString(string name)
+        {
+            if (!SafetySystemEnabled())
+                return 0;
+
+            // Offset into a blob of contiguous job names separated by null for debugging messages.
+            int nameBlobOffset = m_JobNamesBlob.Length;
+            m_JobNamesBlob += name + '\0';
+            return nameBlobOffset;
+        }
+
+        public void PatchJobDebuggerStringTable()
+        {
+            if (!SafetySystemEnabled())
+                return;
+            TypeDefinition jobNameStorageDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
+                i.FullName == "Unity.Development.JobsDebugger.JobNameStorage");
+            if (jobNameStorageDef != null)
+            {
+                jobNameStorageDef.ClassSize = (m_JobNamesBlob.Length * 2 + 3) & ~3;
+                jobNameStorageDef.PackingSize = 4;
+
+                TypeDefinition jobNamesDef = m_ZeroJobsAssembly.MainModule.Types.FirstOrDefault(i =>
+                    i.FullName == "Unity.Development.JobsDebugger.JobNames");
+                FieldDefinition nameStorageField = jobNamesDef.Fields.First(m => m.Name == "m_NameStorage");
+
+                byte[] namesBlob = new byte[jobNameStorageDef.ClassSize];
+                unsafe
+                {
+                    fixed (char* namesPtr = m_JobNamesBlob)
+                    {
+                        for (int i = 0; i < jobNameStorageDef.ClassSize; i++)
+                            namesBlob[i] = ((byte*)namesPtr)[i];
+                    }
+                }
+
+                nameStorageField.Attributes |= FieldAttributes.HasFieldRVA;
+                nameStorageField.InitialValue = namesBlob;
+            }
+        }
+
+        void GenerateProducerPreScheduleFn(ModuleDefinition module, JobDesc jobDesc, TypeReference genericJobProducerTypeRef, SafetyFieldInfo safetyFields, int nameBlobOffset)
+        {
+            MethodDefinition preScheduleFn = new MethodDefinition(k_ProducerPreScheduleFn,
+                MethodAttributes.Public | MethodAttributes.Static,
+                module.ImportReference(typeof(int)));
+
+            preScheduleFn.Body.InitLocals = true;
+            var il = preScheduleFn.Body.GetILProcessor();
+
+            if (genericJobProducerTypeRef != null)
+            {
+                var paramType = jobDesc.JobWrapperField.DeclaringType.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+
+                var wrapperParam = new ParameterDefinition("wrapper", ParameterAttributes.None,
+                    module.ImportReference(paramType.MakeByReferenceType()));
+                var debugNodesParam = new ParameterDefinition("data", ParameterAttributes.None,
+                    module.Assembly.MainModule.ImportReference(m_DependencyValidatorDef).MakeByReferenceType());
+                var jobHandleParam = new ParameterDefinition("dependsOn", ParameterAttributes.None,
+                    module.Assembly.MainModule.ImportReference(m_JobHandleDef).MakeByReferenceType());
+                var deferredSafetyParam = new ParameterDefinition("deferredSafety", ParameterAttributes.None,
+                    module.ImportReference(typeof(void*)));
+
+                preScheduleFn.Parameters.Add(wrapperParam);  // static method so we need ref to the object as first parameter
+                preScheduleFn.Parameters.Add(debugNodesParam);
+                preScheduleFn.Parameters.Add(jobHandleParam);
+                preScheduleFn.Parameters.Add(deferredSafetyParam);
+
+                AddPreScheduleSafetyIL(preScheduleFn, module.Assembly, genericJobProducerTypeRef, safetyFields, nameBlobOffset, false);
+            }
+            il.Emit(OpCodes.Ldc_I4, k_ProducerScheduleReturnValue);
+            il.Emit(OpCodes.Ret);
+
+            jobDesc.JobProducerDef.Methods.Add(preScheduleFn);
+        }
+
+        void GenerateProducerPatchMinMaxFn(ModuleDefinition module, JobDesc jobDesc, TypeReference genericJobProducerTypeRef)
+        {
+            MethodDefinition minMaxFn = new MethodDefinition(k_ProducerPatchMinMaxFn,
+                MethodAttributes.Public | MethodAttributes.Static,
+                module.ImportReference(typeof(void)));
+
+            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None, module.ImportReference(m_JobsUtility_MinMaxDef));
+
+            minMaxFn.Body.InitLocals = true;
+            var il = minMaxFn.Body.GetILProcessor();
+
+            if (jobDesc.JobWrapperField != null)
+            {
+                var paramType = jobDesc.JobWrapperField.DeclaringType.MakeGenericInstanceType(jobDesc.JobData.GenericParameters.ToArray());
+
+                var wrapperParam = new ParameterDefinition("wrapper", ParameterAttributes.None,
+                    module.ImportReference(paramType.MakeByReferenceType()));
+                minMaxFn.Parameters.Add(wrapperParam);
+
+                if (SafetySystemEnabled())
+                    AddMinMaxIL(minMaxFn, module.Assembly, minMaxParam, genericJobProducerTypeRef, null);
+            }
+
+            il.Emit(OpCodes.Ret);
+            minMaxFn.Parameters.Add(minMaxParam);
+            jobDesc.JobProducerDef.Methods.Add(minMaxFn);
+        }
+
+        MethodDefinition GenPreScheduleMethod(
+            AssemblyDefinition asm,
+            TypeDefinition jobTypeDef,
+            SafetyFieldInfo safetyFields,
+            int nameBlobOffset)
+        {
+            var method = new MethodDefinition(k_PrepareJobAtPreScheduleTimeFn,
+                MethodAttributes.Public |
+                MethodAttributes.HideBySig |
+                MethodAttributes.NewSlot |
+                MethodAttributes.Virtual,
+                asm.MainModule.ImportReference(typeof(int)));
+
+            // -------- Parameters ---------
+            var debugNodesParam = new ParameterDefinition("data", ParameterAttributes.None,
+                asm.MainModule.ImportReference(m_DependencyValidatorDef).MakeByReferenceType());
+            var jobHandleParam = new ParameterDefinition("dependsOn", ParameterAttributes.None,
+                asm.MainModule.ImportReference(m_JobHandleDef).MakeByReferenceType());
+            var deferredSafetyParam = new ParameterDefinition("deferredSafety", ParameterAttributes.None,
+                asm.MainModule.ImportReference(typeof(void*)));
+
+            method.Parameters.Add(debugNodesParam);
+            method.Parameters.Add(jobHandleParam);
+            method.Parameters.Add(deferredSafetyParam);
+
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            AddPreScheduleSafetyIL(method, asm, jobTypeDef, safetyFields, nameBlobOffset, true);
+
+            // Magic number "2" is returned so that we can check (at run time) that code-gen actually occured.
+            il.Emit(OpCodes.Ldc_I4, (safetyFields != null && safetyFields.writeErrorIfParallel) ? k_UserScheduleReturnValueNoParallel : k_UserScheduleReturnValue);
+            il.Emit(OpCodes.Ret);
+            method.Body.Optimize();
+            return method;
+        }
+
+        MethodDefinition GenPostScheduleMethod(
+            AssemblyDefinition asm,
+            TypeDefinition jobTypeDef,
+            SafetyFieldInfo safetyFields,
+            int nameBlobOffset)
+        {
+            var method = new MethodDefinition(k_PrepareJobAtPostScheduleTimeFn,
+                MethodAttributes.Public |
+                MethodAttributes.HideBySig |
+                MethodAttributes.NewSlot |
+                MethodAttributes.Virtual,
+                asm.MainModule.ImportReference(typeof(void)));
+
+            // -------- Parameters ---------
+            var debugNodesParam = new ParameterDefinition("data", ParameterAttributes.None,
+                asm.MainModule.ImportReference(m_DependencyValidatorDef).MakeByReferenceType());
+            var jobHandleParam = new ParameterDefinition("scheduledJob", ParameterAttributes.None,
+                asm.MainModule.ImportReference(m_JobHandleDef).MakeByReferenceType());
+
+            method.Parameters.Add(debugNodesParam);
+            method.Parameters.Add(jobHandleParam);
+
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            AddPostScheduleSafetyIL(method, asm, safetyFields, nameBlobOffset);
+
+            il.Emit(OpCodes.Ret);
+            method.Body.Optimize();
+            return method;
+        }
+
+        MethodDefinition GenPatchMinMaxMethod(
+            AssemblyDefinition asm,
+            TypeDefinition jobTypeDef)
+        {
+            var method = new MethodDefinition(k_PatchMinMax,
+                MethodAttributes.Public |
+                MethodAttributes.HideBySig |
+                MethodAttributes.NewSlot |
+                MethodAttributes.Virtual,
+                asm.MainModule.ImportReference(typeof(void)));
+
+            TypeDefinition minMaxTD = m_JobsUtilityDef.NestedTypes.First(n => n.Name == "MinMax");
+            ParameterDefinition minMaxParam = new ParameterDefinition("minMax", ParameterAttributes.None, asm.MainModule.ImportReference(minMaxTD));
+            method.Parameters.Add(minMaxParam);
+
+            // -------- Parameters ---------
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            if (SafetySystemEnabled())
+                AddMinMaxIL(method, asm, minMaxParam, jobTypeDef, null);
+
+            il.Emit(OpCodes.Ret);
+            method.Body.Optimize();
+            return method;
         }
 
         public static bool IsValidSafetyHandleField(FieldReference fieldRef)
@@ -1578,6 +1927,12 @@ namespace Unity.ZeroPlayer
             return fieldRef.FieldType.FullName == "Unity.Collections.LowLevel.Unsafe.DisposeSentinel";
         }
 
+        public static bool IsValidAllocatorField(FieldReference fieldRef)
+        {
+            return fieldRef.FieldType.FullName == "Unity.Collections.Allocator" &&
+                (fieldRef.Name == "m_AllocatorLabel");
+        }
+
         public static bool IsValueTypeField(FieldReference fieldRef)
         {
             return fieldRef.FieldType.IsValueType && !fieldRef.FieldType.IsPrimitive;
@@ -1588,29 +1943,27 @@ namespace Unity.ZeroPlayer
             return IsValueTypeField(fieldRef) || IsValidDisposeSentinelField(fieldRef);
         }
 
-        void AddSafetyIL(
-            MethodDefinition method,
+        SafetyFieldInfo GatherSafetyFields(
             AssemblyDefinition asm,
-            TypeReference fieldsTypeRef,
-            VariableDefinition variableDefinition)    // if this is null, then "this" is assumed.
+            TypeReference fieldsTypeRef)
         {
-            if (!SafetySystemEnabled())
-                return;
-
             TypeDefinition fieldsTypeDef = fieldsTypeRef.Resolve();
 
             if (!fieldsTypeDef.HasFields || !fieldsTypeDef.IsValueType)
-                return;
+                return null;
 
-            method.Body.InitLocals = true;
-            ILProcessor il = method.Body.GetILProcessor();
+            List<SafetyField> safetyFields = new List<SafetyField>();
+            int readOnlyStaticCount = 0;
+            int writableStaticCount = 0;
+            int deallocateCount = 0;
+            bool writeErrorIfParallel = false;
 
             foreach (var fieldPath in IterateJobFields(fieldsTypeRef,
                 shouldYieldFilter: IsPossibleSafetyCleanupTypeField))
             {
                 var field = fieldPath.Last();
 
-                // This method - AddSafetyIL - can be called on a UserJob or a wrapper.
+                // This method can be called on a UserJob or a wrapper.
                 // If the wrapper is used, we need to be careful to not recurse in to the UserJob,
                 // which will cause bad IL generation. We are spared this fate since the fieldType
                 // is a generic parameter, and thus not a primitive. This is tested for in
@@ -1620,10 +1973,13 @@ namespace Unity.ZeroPlayer
                 {
                     // If this is a safety handle, check the parent field (if any!) for any interesting attributes
                     // that may modify how we generate safety checks
+                    List<FieldReference> importedDynamicReadOnlyCountField = null;
+                    List<FieldReference> importedDynamicReadWriteCountField = null;
                     bool disableSafety = false;
                     bool writeOnly = false;
                     bool readOnly = false;
                     bool needRelease = false;
+                    bool dynamicSafety = false;
 
                     if (fieldPath.Count > 1)
                     {
@@ -1631,65 +1987,307 @@ namespace Unity.ZeroPlayer
                         var fieldTypeDef = parentField.FieldType.Resolve();
                         var fieldDef = parentField.Resolve();
 
+                        dynamicSafety = field.Name == "m_Safety0";
+                        if (dynamicSafety)
+                        {
+                            foreach (var siblingFieldPath in IterateJobFields(field.DeclaringType,
+                                shouldYieldFilter: (FieldReference f) => f.FieldType.MetadataType == MetadataType.Int32,
+                                shouldRecurseFilter: (FieldReference f) => false))
+                            {
+                                var siblingField = siblingFieldPath.Last();
+                                if (siblingField.Name == "m_SafetyReadOnlyCount")
+                                    importedDynamicReadOnlyCountField = fieldPath.Take(fieldPath.Count - 1).Concat(siblingFieldPath).ImportReferencesIntoAndMakeFieldPathPublic(asm);
+                                else if (siblingField.Name == "m_SafetyReadWriteCount")
+                                    importedDynamicReadWriteCountField = fieldPath.Take(fieldPath.Count - 1).Concat(siblingFieldPath).ImportReferencesIntoAndMakeFieldPathPublic(asm);
+                            }
+
+                            if (importedDynamicReadOnlyCountField == null || importedDynamicReadWriteCountField == null)
+                            {
+                                throw new ArgumentException(
+                                    $"m_Safety0 found without corresponding m_SafetyReadOnlyCount or m_SafetyReadWriteCount in '{fieldDef.FullName}'");
+                            }
+                        }
+
                         // Unity.Collections.LowLevel.Unsafe.NativeDisableContainerSafetyRestrictionAttribute
                         disableSafety = fieldDef.HasNamedAttribute("NativeDisableContainerSafetyRestriction");
 
                         // Unity.Collections.WriteOnlyAttribute
                         // Unity.Collections.LowLevel.Unsafe.NativeContainerAttribute
-                        // Unity.Collections.NativeContainerIsAtomicWriteOnlyAttribute
+                        // + Unity.Collections.NativeContainerIsAtomicWriteOnlyAttribute
+                        bool atomicWriteOnly = fieldTypeDef.HasNamedAttribute("NativeContainerIsAtomicWriteOnly");
                         writeOnly = fieldDef.HasNamedAttribute("WriteOnly") ||
-                            (fieldTypeDef.HasNamedAttribute("NativeContainer") && fieldTypeDef.HasNamedAttribute("NativeContainerIsAtomicWriteOnly"));
+                            (fieldTypeDef.HasNamedAttribute("NativeContainer") && atomicWriteOnly);
 
                         // Unity.Collections.ReadOnlyAttribute
-                        readOnly = fieldDef.HasNamedAttribute("ReadOnly");
+                        // Unity.Collections.LowLevel.Unsafe.NativeContainerAttribute
+                        // + Unity.Collections.NativeContainerIsReadOnlyAttribute
+                        readOnly = fieldDef.HasNamedAttribute("ReadOnly") ||
+                            (fieldTypeDef.HasNamedAttribute("NativeContainer") && fieldTypeDef.HasNamedAttribute("NativeContainerIsReadOnly"));
+
+                        // Checking the container for attributes is not enough - actually we must check each declaring type
+                        for (int level = fieldPath.Count - 3; level >= 0; level--)
+                        {
+                            var nextParentField = fieldPath[level];
+                            var nextFieldTypeDef = nextParentField.FieldType.Resolve();
+                            var nextFieldDef = nextParentField.Resolve();
+
+                            atomicWriteOnly = nextFieldTypeDef.HasNamedAttribute("NativeContainerIsAtomicWriteOnly");
+                            writeOnly = writeOnly || nextFieldDef.HasNamedAttribute("WriteOnly") ||
+                                (nextFieldTypeDef.HasNamedAttribute("NativeContainer") && atomicWriteOnly);
+
+                            readOnly = readOnly || nextFieldDef.HasNamedAttribute("ReadOnly") ||
+                                (nextFieldTypeDef.HasNamedAttribute("NativeContainer") && nextFieldTypeDef.HasNamedAttribute("NativeContainerIsReadOnly"));
+
+                            disableSafety = disableSafety || nextFieldDef.HasNamedAttribute("NativeDisableContainerSafetyRestriction");
+                        }
+
+                        if (!disableSafety)
+                        {
+                            // Count readonly or writable safety handles for validating dependencies if safety isn't disabled on them
+                            if (!dynamicSafety)
+                            {
+                                // While [ReadOnly] does affect dynamic safety handles inside the container or resource,
+                                // we count those handles separately with other dynamic handles.
+                                if (readOnly)
+                                    readOnlyStaticCount++;
+                                else
+                                    writableStaticCount++;
+                            }
+
+                            // Unity.Collections.NativeContainerSupportsMinMaxWriteRestriction
+                            bool supportsMinMaxWriteRestriction = fieldTypeDef.HasNamedAttribute("NativeContainerSupportsMinMaxWriteRestriction");
+
+                            // Compile-time checks mirroring unity/Runtime/Jobs/JobReflectionData.cpp -- IsValidContainerType()
+                            if (writeOnly && readOnly)
+                            {
+                                throw new ArgumentException(
+                                    $"[ReadOnly] and [WriteOnly] are both specified on '{fieldDef.FullName}'");
+                            }
+
+                            if (atomicWriteOnly && supportsMinMaxWriteRestriction)
+                            {
+                                throw new ArgumentException(
+                                    $"[NativeContainerIsAtomicWriteOnly] and [NativeContainerSupportsMinMaxWriteRestriction] are both specified on '{fieldDef.FullName}'");
+                            }
+
+                            bool disableParallelForRestriction = fieldTypeDef.HasNamedAttribute("NativeDisableParallelForRestriction");
+                            if (!readOnly && !disableSafety && !atomicWriteOnly && !supportsMinMaxWriteRestriction && !disableParallelForRestriction)
+                                writeErrorIfParallel = true;
+                        }
 
                         needRelease = FieldHasDeallocOnJobCompletion(fieldDef);
-
-                        if (writeOnly && readOnly)
+                        if (needRelease)
                         {
-                            throw new ArgumentException(
-                                $"[ReadOnly] and [WriteOnly] are both specified on '{fieldDef.FullName}'");
+                            // Big Unity doesn't check for this, but it is unsupported and needs to be enforced - just in case
+                            if (dynamicSafety)
+                            {
+                                throw new ArgumentException(
+                                    $"[DeallocateOnJobCompletion] for {fieldDef.FullName} is invalid with dynamic safety handles in {fieldDef.FieldType.FullName}");
+                            }
+                            deallocateCount++;
                         }
                     }
 
-                    var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
+                    List<FieldReference> importedField = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
+                    string nestedName = fieldsTypeRef.Name;
+                    for (int i = 0; i < importedField.Count - 1; i++)
+                        nestedName += "." + importedField[i].Resolve().Name;
 
-                    // AtomicSafetyHandle.Release(result.m_Safety);
-                    if (needRelease)
+                    safetyFields.Add(new SafetyField
                     {
-                        il.EmitLdThisOrVarAddress(variableDefinition); //il.Emit(OpCodes.Ldarg_0));
-                        il.Emit(OpCodes.Ldfld, importedFieldPath);
-                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_SafetyHandle_ReleaseFnDef));
-                    }
-
-                    // AtomicSafetyHandle.PatchLocal(ref result.m_Safety);
-                    il.EmitLdThisOrVarAddress(variableDefinition); //il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldflda, importedFieldPath);
-                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_SafetyHandle_PatchLocalFnDef));
-
-                    // AtomicSafetyHandle.SetAllowWriteOnly(ref result.m_Safety);
-                    // or
-                    // AtomicSafetyHandle.SetAllowReadOnly(ref result.m_Safety);
-                    if (!disableSafety && (writeOnly || readOnly))
-                    {
-                        il.EmitLdThisOrVarAddress(variableDefinition); //il.Emit(OpCodes.Ldarg_0);
-                        il.Emit(OpCodes.Ldflda, importedFieldPath);
-
-                        if (writeOnly)
-                            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_SafetyHandle_AllowWriteOnlyFnDef));
-                        if (readOnly)
-                            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_SafetyHandle_AllowReadOnlyFnDef));
-                    }
+                        importedField = importedField,
+                        importedDynamicReadOnlyField = importedDynamicReadOnlyCountField,
+                        importedDynamicReadWriteField = importedDynamicReadWriteCountField,
+                        disableSafety = disableSafety,
+                        writeOnly = writeOnly,
+                        readOnly = readOnly,
+                        needRelease = needRelease,
+                        dynamicSafety = dynamicSafety,
+                        nameBlobOffset = AddJobDebuggerString(nestedName),
+                    });
                 }
-                else if (IsValidDisposeSentinelField(field))
-                {
-                    var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
 
-                    il.EmitLdThisOrVarAddress(variableDefinition); //il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ldflda, importedFieldPath);
-                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DisposeSentinel_ClearFnDef));
+            }
+
+            return new SafetyFieldInfo
+            {
+                fields = safetyFields,
+                readOnlyStaticCount = readOnlyStaticCount,
+                writableStaticCount = writableStaticCount,
+                deallocateCount = deallocateCount,
+                writeErrorIfParallel = writeErrorIfParallel,
+            };
+        }
+
+        void AddPreScheduleSafetyIL(
+            MethodDefinition method,
+            AssemblyDefinition asm,
+            TypeReference fieldsTypeRef,
+            SafetyFieldInfo safetyFields,
+            int nameBlobOffset,
+            bool validateSafety)
+        {
+            TypeDefinition fieldsTypeDef = fieldsTypeRef.Resolve();
+
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            if (fieldsTypeDef.HasFields && fieldsTypeDef.IsValueType)
+            {
+                foreach (var fieldPath in IterateJobFields(fieldsTypeRef,
+                    shouldYieldFilter: IsPossibleSafetyCleanupTypeField))
+                {
+                    var field = fieldPath.Last();
+
+                    // This method can be called on a UserJob or a wrapper.
+                    // If the wrapper is used, we need to be careful to not recurse in to the UserJob,
+                    // which will cause bad IL generation. We are spared this fate since the fieldType
+                    // is a generic parameter, and thus not a primitive. This is tested for in
+                    // IterateJobFields, which only iterates into value type fields.
+
+                    if (IsValidAllocatorField(field))
+                    {
+                        // Ensure the allocator label is Persistent or TempJob if we also have DeallocateOnJobCompletion attribute
+                        if (fieldPath.Count > 1)
+                        {
+                            var parentField = fieldPath[fieldPath.Count - 2];
+                            var fieldDef = parentField.Resolve();
+
+                            if (FieldHasDeallocOnJobCompletion(fieldDef))
+                            {
+                                var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
+
+                                // DependencyValidator.ValidateDeallocateOnJobCompletion(result.m_AllocatorLabel);
+                                il.Emit(OpCodes.Ldarg_0);
+                                il.Emit(OpCodes.Ldfld, importedFieldPath);
+                                il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_ValidateDeallocateOnJobCompletionFnDef));
+                            }
+                        }
+                    }
+
+                    else if (IsValidDisposeSentinelField(field))
+                    {
+                        var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
+
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldflda, importedFieldPath);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DisposeSentinel_ClearFnDef));
+                    }
                 }
             }
+
+            if (safetyFields != null && safetyFields.fields.Count > 0)
+            {
+                // DependencyValidator.AllocateKnown(ref debugData, readOnlyCount, writableCount, deallocateCount);
+                il.Emit(OpCodes.Ldarg_1);
+                il.Emit(OpCodes.Ldc_I4, safetyFields.readOnlyStaticCount);
+                il.Emit(OpCodes.Ldc_I4, safetyFields.writableStaticCount);
+                il.Emit(OpCodes.Ldc_I4, safetyFields.deallocateCount);
+                il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_AllocateKnownFnDef));
+
+                foreach (var safetyField in safetyFields.fields)
+                {
+                    if (safetyField.needRelease)
+                    {
+                        // DependencyValidator.RecordDeallocate(ref debugData, ref this.m_Safety);
+                        il.Emit(OpCodes.Ldarg_1);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldflda, safetyField.importedField);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_RecordDeallocateFnDef));
+                    }
+
+                    // [NativeDisableContainerSafetyRestriction] makes a safety handle not be included
+                    // in validation checks. It means we guarantee what we are doing with it is safe... which is dangerous and should
+                    // only happen in situations we guarantee, for instance, aliasing isn't dangerous.
+                    if (safetyField.disableSafety)
+                        continue;
+
+                    if (safetyField.dynamicSafety)
+                    {
+                        // DependencyValidator.StoreSafetyDynamic(ref debugData, ref this.m_Safety0, fieldNameBlobOffset, jobNameBlobOffset, this.m_SafetyReadOnlyCount,
+                        //     readonly ? 0 : this.m_SafetyReadWriteCount, readonly ? this.m_SafetyReadWriteCount : 0);
+                        il.Emit(OpCodes.Ldarg_1);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldflda, safetyField.importedField);
+                        il.Emit(OpCodes.Ldc_I4, safetyField.nameBlobOffset);
+                        il.Emit(OpCodes.Ldc_I4, nameBlobOffset);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadOnlyField);
+                        if (safetyField.readOnly)
+                            il.Emit(OpCodes.Ldc_I4_0);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadWriteField);
+                        if (!safetyField.readOnly)
+                            il.Emit(OpCodes.Ldc_I4_0);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_RecordAndSanityCheckDynamicFnDef));
+                    }
+                    else
+                    {
+                        il.Emit(OpCodes.Ldarg_1);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldflda, safetyField.importedField);
+                        il.Emit(OpCodes.Ldc_I4, safetyField.nameBlobOffset);
+                        il.Emit(OpCodes.Ldc_I4, nameBlobOffset);
+
+                        if (safetyField.readOnly)
+                            // DependencyValidator.RecordAndSanityCheckReadOnly(ref debugData, ref this.m_Safety, fieldNameBlobOffset, jobNameBlobOffset);
+                            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_RecordAndSanityCheckReadOnlyFnDef));
+                        else
+                            // DependencyValidator.RecordAndSanityCheckWritable(ref debugData, ref this.m_Safety, fieldNameBlobOffset, jobNameBlobOffset);
+                            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_RecordAndSanityCheckWritableFnDef));
+                    }
+                }
+
+                // Validates safety nodes data
+
+                // We only do this on the job, not the job producer. Job producers still need to add safety handles and sanity check them though
+                if (validateSafety)
+                {
+                    // DependencyValidator.ValidateScheduleSafety(ref debugData, ref dependsOnJob, nameBlobOffset);
+                    il.Emit(OpCodes.Ldarg_1);
+                    il.Emit(OpCodes.Ldarg_2);
+                    il.Emit(OpCodes.Ldc_I4, nameBlobOffset);
+                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_ValidateScheduleSafetyFnDef));
+                }
+            }
+
+            if (validateSafety)
+            {
+                // DependencyValidator.ValidateDeferred(ref debugData, &deferredSafetyHandle);
+                il.Emit(OpCodes.Ldarg_1);
+                il.Emit(OpCodes.Ldarg_3);
+                il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_ValidateDeferredFnDef));
+            }
+        }
+
+        void AddPostScheduleSafetyIL(
+            MethodDefinition method,
+            AssemblyDefinition asm,
+            SafetyFieldInfo safetyFields,
+            int nameBlobOffset)
+        {
+            method.Body.InitLocals = true;
+            ILProcessor il = method.Body.GetILProcessor();
+
+            // Always call these because there could have been safety handles added from the job wrapper which the job itself isn't aware of
+
+            // DependencyValidator.UpdateDependencies(ref debugData, ref jobHandle, nameBlobOffest);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Ldarg_2);
+            il.Emit(OpCodes.Ldc_I4, nameBlobOffset);
+            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_UpdateDependenciesFnDef));
+
+            // DependencyValidator.Cleanup(ref debugData);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_DependencyValidator_CleanupFnDef));
+
+            // In singlethreaded builds, we cleanup after post-schedule, since execute already occurred during schedule itself, but
+            // post schedule had not yet occurred to update dependencies. This way dependencies are tracked *as if* we were in a
+            // multithreaded build maintaining parity in determinism between single thread and multithread builds. If we were
+            // to clean up safety handles/nodes during post-execute cleanup in this case (prior to schedule method finishing and returning
+            // a job handle), safety handle data would be corrupted.
+            if (!MultithreadingEnabled())
+                GenCleanupSafetyIL(method, asm, null, safetyFields);
         }
 
         static bool DisablesMinMaxSafety(FieldReference fr)
@@ -1710,9 +2308,6 @@ namespace Unity.ZeroPlayer
             VariableDefinition variableDefinition)    // if this is null, then "this" is assumed.
         {
             TypeDefinition fieldsTypeDef = fieldsTypeRef.Resolve();
-
-            if (!SafetySystemEnabled())
-                return;
 
             if (!fieldsTypeDef.HasFields || !fieldsTypeDef.IsValueType)
                 return;
@@ -1737,7 +2332,7 @@ namespace Unity.ZeroPlayer
 
                 var importedHierarchy = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
 
-                il.EmitLdThisOrVarAddress(variableDefinition);
+                il.EmitLdThisOrVar(variableDefinition);
                 il.Emit(OpCodes.Ldflda, importedHierarchy.GetRange(0, importedHierarchy.Count - 1));
 
                 // Load minmax argument, then store it in the field as needed
@@ -1752,32 +2347,99 @@ namespace Unity.ZeroPlayer
         void GenCleanupSafetyIL(
             MethodDefinition method,
             AssemblyDefinition asm,
-            TypeReference fieldsTypeRef,
-            VariableDefinition variableDefinition)    // if this is null, then "this" is assumed.
+            VariableDefinition variableDefinition,  // if this is null, then "this" is assumed.
+            SafetyFieldInfo safetyFields)
         {
-            if (!SafetySystemEnabled())
-                return;
-
-            TypeDefinition fieldsTypeDef = fieldsTypeRef.Resolve();
-
-            if (!fieldsTypeDef.HasFields || !fieldsTypeDef.IsValueType)
+            if (safetyFields == null)
                 return;
 
             method.Body.InitLocals = true;
             var il = method.Body.GetILProcessor();
 
-            // Iterate through all value type fields
-            foreach (var fieldPath in IterateJobFields(fieldsTypeRef, shouldYieldFilter: IsValueTypeField))
+            foreach (var safetyField in safetyFields.fields)
             {
-                // and if it's a safety handle, process it
-                if (IsValidSafetyHandleField(fieldPath.Last()))
+                // AtomicSafetyHandle.ReleasePatched(ref this.m_Safety);
+                if (safetyField.needRelease)
                 {
-                    var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
+                    il.EmitLdThisOrVar(variableDefinition);
+                    il.Emit(OpCodes.Ldflda, safetyField.importedField);
+                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_AtomicSafetyHandle_ReleasePatchedFnDef));
+                }
+            }
+        }
 
-                    // AtomicSafetyHandle.UnpatchLocal(ref result.m_Safety);
-                    il.EmitLdThisOrVarValue(variableDefinition);
-                    il.Emit(OpCodes.Ldflda, importedFieldPath);
-                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_SafetyHandle_UnpatchLocalFnDef));
+        void AddPatchSafetyIL(
+            MethodDefinition method,
+            AssemblyDefinition asm,
+            VariableDefinition variableDefinition,  // if this is null, then "this" is assumed.
+            SafetyFieldInfo safetyFields)
+        {
+            if (safetyFields == null)
+                return;
+
+            method.Body.InitLocals = true;
+            var il = method.Body.GetILProcessor();
+
+            foreach (var safetyField in safetyFields.fields)
+            {
+                if (safetyField.dynamicSafety)
+                {
+                    // AtomicSafetyHandle.PatchLocalDynamic(
+                    //     ref this.m_Safety0,
+                    //     !disablesafety ? this.m_SafetyReadOnlyCount  : 0,
+                    //     !readonly      ? this.m_SafetyReadWriteCount : 0,
+                    //     !readonly      ? 0                           : this.m_SafetyReadWriteCount,
+                    //     !disablesafety ? 0                           : this.m_SafetyReadOnlyCount
+                    //     );
+                    //
+                    // Note that readonly==true can only occur if disablesafety==false
+
+                    il.EmitLdThisOrVar(variableDefinition);
+                    il.Emit(OpCodes.Ldflda, safetyField.importedField);
+                    if (!safetyField.disableSafety)
+                    {
+                        il.EmitLdThisOrVar(variableDefinition);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadOnlyField);
+                    }
+                    else
+                        il.Emit(OpCodes.Ldc_I4_0);
+                    if (!safetyField.readOnly)
+                    {
+                        il.EmitLdThisOrVar(variableDefinition);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadWriteField);
+                    }
+                    else
+                        il.Emit(OpCodes.Ldc_I4_0);
+                    if (!safetyField.readOnly)
+                        il.Emit(OpCodes.Ldc_I4_0);
+                    else
+                    {
+                        il.EmitLdThisOrVar(variableDefinition);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadWriteField);
+                    }
+                    if (!safetyField.disableSafety)
+                        il.Emit(OpCodes.Ldc_I4_0);
+                    else
+                    {
+                        il.EmitLdThisOrVar(variableDefinition);
+                        il.Emit(OpCodes.Ldfld, safetyField.importedDynamicReadOnlyField);
+                    }
+                    il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_AtomicSafetyHandle_PatchLocalDynamicFnDef));
+                }
+                else
+                {
+                    il.EmitLdThisOrVar(variableDefinition);
+                    il.Emit(OpCodes.Ldflda, safetyField.importedField);
+
+                    if (safetyField.readOnly)
+                        // AtomicSafetyHandle.PatchLocalReadOnly(ref this.m_Safety);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_AtomicSafetyHandle_PatchLocalReadOnlyFnDef));
+                    else if (safetyField.writeOnly)
+                        // AtomicSafetyHandle.PatchLocalWriteOnly(ref this.m_Safety);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_AtomicSafetyHandle_PatchLocalWriteOnlyFnDef));
+                    else
+                        // AtomicSafetyHandle.PatchLocalReadWrite(ref this.m_Safety);
+                        il.Emit(OpCodes.Call, asm.MainModule.ImportReference(m_AtomicSafetyHandle_PatchLocalReadWriteFnDef));
                 }
             }
         }
@@ -1786,7 +2448,7 @@ namespace Unity.ZeroPlayer
     // Jobs-specific Cecil utilities/extension methods
     public static class JobCecilUtils
     {
-        public static void EmitLdThisOrVarAddress(this ILProcessor il, VariableDefinition variableDefinition)
+        public static void EmitLdThisOrVar(this ILProcessor il, VariableDefinition variableDefinition)
         {
             if (variableDefinition == null)
             {
@@ -1794,19 +2456,10 @@ namespace Unity.ZeroPlayer
             }
             else
             {
-                il.Emit(OpCodes.Ldloca, variableDefinition);
-            }
-        }
-
-        public static void EmitLdThisOrVarValue(this ILProcessor il, VariableDefinition variableDefinition)
-        {
-            if (variableDefinition == null)
-            {
-                il.Emit(OpCodes.Ldarg_0);
-            }
-            else
-            {
-                il.Emit(OpCodes.Ldloc, variableDefinition);
+                if (variableDefinition.VariableType.IsPointer)
+                    il.Emit(OpCodes.Ldloc, variableDefinition);
+                else
+                    il.Emit(OpCodes.Ldloca, variableDefinition);
             }
         }
 
@@ -1816,6 +2469,104 @@ namespace Unity.ZeroPlayer
             // We may have more generic parameters than we need. For example,
             // the schedule may take more parameters than needed by the job.
             return gp.Take(forType.GenericParameters.Count).Select(param => module.ImportReference(param)).ToArray();
+        }
+
+        public static bool IsLdFld(Instruction i)
+        {
+            if (i.OpCode == OpCodes.Ldfld ||
+                i.OpCode == OpCodes.Ldflda)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsLdLoc(Instruction i)
+        {
+            if (i.OpCode == OpCodes.Ldloc ||
+                i.OpCode == OpCodes.Ldloc_S ||
+                i.OpCode == OpCodes.Ldloca ||
+                i.OpCode == OpCodes.Ldloca_S ||
+                i.OpCode == OpCodes.Ldloc_0 ||
+                i.OpCode == OpCodes.Ldloc_1 ||
+                i.OpCode == OpCodes.Ldloc_2 ||
+                i.OpCode == OpCodes.Ldloc_3)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsLdArg(Instruction i)
+        {
+            if (i.OpCode == OpCodes.Ldarg ||
+                i.OpCode == OpCodes.Ldarg_S ||
+                i.OpCode == OpCodes.Ldarga ||
+                i.OpCode == OpCodes.Ldarga_S ||
+                i.OpCode == OpCodes.Ldarg_0 ||
+                i.OpCode == OpCodes.Ldarg_1 ||
+                i.OpCode == OpCodes.Ldarg_2 ||
+                i.OpCode == OpCodes.Ldarg_3)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsLdC(Instruction i)
+        {
+            if (i.OpCode == OpCodes.Ldc_I4 ||
+                i.OpCode == OpCodes.Ldc_I4_S ||
+                i.OpCode == OpCodes.Ldc_I4_M1 ||  // Minus 1
+                i.OpCode == OpCodes.Ldc_I4_0 ||
+                i.OpCode == OpCodes.Ldc_I4_1 ||
+                i.OpCode == OpCodes.Ldc_I4_2 ||
+                i.OpCode == OpCodes.Ldc_I4_3 ||
+                i.OpCode == OpCodes.Ldc_I4_4 ||
+                i.OpCode == OpCodes.Ldc_I4_5 ||
+                i.OpCode == OpCodes.Ldc_I4_6 ||
+                i.OpCode == OpCodes.Ldc_I4_7 ||
+                i.OpCode == OpCodes.Ldc_I4_8 ||
+                i.OpCode == OpCodes.Ldc_I8 ||
+                i.OpCode == OpCodes.Ldc_R4 ||
+                i.OpCode == OpCodes.Ldc_R8)
+            {
+                return true;
+            }
+            return false;
+        }
+
+
+        public static bool FindPrevArg(Mono.Collections.Generic.Collection<Instruction> bc, int searchFromI, out int opFirstI, out int opLastI)
+        {
+            for (int i = searchFromI; i >= 0; i--)
+            {
+                Instruction inst = bc[i];
+                if (IsLdArg(inst) || IsLdLoc(inst) || IsLdC(inst))
+                {
+                    opFirstI = i;
+                    opLastI = i;
+                    return true;
+                }
+
+                if (IsLdFld(inst))
+                {
+                    opLastI = i;
+                    for (i--; i >= 0; i--)
+                    {
+                        inst = bc[i];
+                        if (IsLdArg(inst) || IsLdLoc(inst))
+                        {
+                            opFirstI = i;
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            opFirstI = -1;
+            opLastI = -1;
+            return false;
         }
     }
 }

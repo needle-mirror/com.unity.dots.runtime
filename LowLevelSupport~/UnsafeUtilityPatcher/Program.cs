@@ -65,6 +65,8 @@ namespace UnsafeUtilityPatcher
         const string kUnsafeUtilityAs                           = "As";
         const string kUnsafeUtilityAsRef                        = "AsRef";
         const string kUnsafeUtilityArrayElementAsRef            = "ArrayElementAsRef";
+        const string kUnsafeUtilityInternalEnumToInt            = "EnumToInt";
+        const string kUnsafeUtilityEnumEquals                   = "EnumEquals";
 
         static void Main(string[] args)
         {
@@ -93,6 +95,8 @@ namespace UnsafeUtilityPatcher
             InjectUtilityAs(ctx);
             InjectUtilityAsRef(ctx);
             InjectUtilityArrayElementAsRef(ctx);
+            InjectUtilityInternalEnumToInt(ctx);
+            InjectUtilityEnumEquals(ctx);
 
             EnsureTargetFolderExists(s_OutputPath);
             assembly.Write(s_OutputPath, new WriterParameters { SymbolWriterProvider = CreateDebugWriterProviderFor(s_AssemblyPath) });
@@ -457,6 +461,42 @@ namespace UnsafeUtilityPatcher
             ilProcessor.Append(ilProcessor.Create(OpCodes.Add));
             ilProcessor.Append(ilProcessor.Create(OpCodes.Ldarg_3));
             ilProcessor.Append(ilProcessor.Create(OpCodes.Stobj, method.GenericParameters[0]));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ret));
+        }
+
+        private static void InjectUtilityInternalEnumToInt(UnsafeUtilityPatcherContext ctx)
+        {
+            var ilProcessor = GetILProcessorForMethod(ctx, kUnsafeUtilityInternalEnumToInt);
+
+            /*
+                ldarg.0
+                conv.i4
+                ret
+            */
+
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ldarg_0));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Conv_I4));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ret));
+        }
+
+        private static void InjectUtilityEnumEquals(UnsafeUtilityPatcherContext ctx)
+        {
+            var ilProcessor = GetILProcessorForMethod(ctx, kUnsafeUtilityEnumEquals);
+
+            /*
+                ldarg.0
+                conv.i8
+                ldarg.1
+                conv.i8
+                ceq
+                ret
+            */
+
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ldarg_0));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Conv_I8));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ldarg_1));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Conv_I8));
+            ilProcessor.Append(ilProcessor.Create(OpCodes.Ceq));
             ilProcessor.Append(ilProcessor.Create(OpCodes.Ret));
         }
     }

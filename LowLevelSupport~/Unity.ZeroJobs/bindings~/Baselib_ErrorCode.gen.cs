@@ -42,6 +42,9 @@ namespace Unity.Baselib.LowLevel
             InvalidPathname = 0x5000000,
             RequestedAccessIsNotAllowed = 0x5000001,
             IOError = 0x5000002,
+            /// <summary>DynamicLibrary</summary>
+            FailedToOpenDynamicLibrary = 0x6000000,
+            FunctionNotFound = 0x6000001,
             /// <summary>
             /// An error that was not anticipated by the baselib authors.
             /// Occurrence of this error is preceeded by a debug assertion.

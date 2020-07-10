@@ -31,7 +31,9 @@
 using System;
 using System.Runtime.InteropServices;
 using Unity.Collections.LowLevel.Unsafe;
-using Unity.Burst;
+#if ENABLE_PROFILER
+using Unity.Development.Profiling;
+#endif
 
 namespace Unity.Development.PlayerConnection
 {
@@ -49,9 +51,21 @@ namespace Unity.Development.PlayerConnection
         [StructLayout(LayoutKind.Sequential)]
         public struct MessageStreamBuffer
         {
+            private int m_Size;
+
             public IntPtr Buffer { get; private set; }
             public unsafe MessageStreamBuffer* Next { get; set; }
-            public int Size { get; set; }
+            public int Size
+            {
+                get => m_Size;
+                set
+                {
+#if ENABLE_PROFILER
+                    ProfilerStats.AccumStats.memUsedProfiler.Accumulate(value - m_Size);
+#endif
+                    m_Size = value;
+                }
+            }
             public int Capacity { get; private set; }
 
             public void Alloc(int bytes)
@@ -61,6 +75,9 @@ namespace Unity.Development.PlayerConnection
                 unsafe
                 {
                     Buffer = (IntPtr)UnsafeUtility.Malloc(bytes, 0, Unity.Collections.Allocator.Persistent);
+#if ENABLE_PROFILER
+                    ProfilerStats.AccumStats.memReservedProfiler.Accumulate(bytes);
+#endif
                     Next = null;
                 }
 
@@ -76,6 +93,9 @@ namespace Unity.Development.PlayerConnection
                 unsafe
                 {
                     UnsafeUtility.Free((void*)Buffer, Unity.Collections.Allocator.Persistent);
+#if ENABLE_PROFILER
+                    ProfilerStats.AccumStats.memReservedProfiler.Accumulate((long)-Capacity);
+#endif
                     Next = null;
                 }
 
@@ -85,37 +105,46 @@ namespace Unity.Development.PlayerConnection
             }
         }
 
+        private IntPtr m_BaselibNodeNext;  // This allows us to pretend this struct inherits from mpmc_node<pointer> in native code
+
         public unsafe MessageStreamBuffer* BufferWrite { get; set; }  // always tail node (may also be head)
         public unsafe MessageStreamBuffer* BufferRead { get; set; }  // always head node
-        public unsafe MessageStream* next;  // @@todo remove w/native queue
         public int TotalBytes { get; set; }
-        public readonly int reserve;
+        public readonly int m_Reserve;
+        public byte Active { get; set; }
 
         public unsafe MessageStream(int reserveSize)
         {
-            reserve = reserveSize;
+            m_BaselibNodeNext = IntPtr.Zero;
+            m_Reserve = reserveSize;
             BufferRead = (MessageStreamBuffer*)UnsafeUtility.Malloc(sizeof(MessageStreamBuffer), 0, Collections.Allocator.Persistent);
             *BufferRead = new MessageStreamBuffer();
-            BufferRead->Alloc(reserve);
+            BufferRead->Alloc(m_Reserve);
             BufferWrite = BufferRead;
             TotalBytes = 0;
-            next = null;
+            Active = 0;
         }
 
         public unsafe void Free()
         {
             FreeRange(BufferRead, null);
+            BufferWrite = null;
             BufferRead = null;
         }
 
         public unsafe void Allocate(int bytes)
         {
+            // If there are already additional buffers in the list, we should try to use them.
+            // Only if none are available with enough capacity do we allocate a new one on the heap
+            while (BufferWrite->Size + bytes > BufferWrite->Capacity && BufferWrite->Next != null)
+                BufferWrite = BufferWrite->Next;
+
             if (BufferWrite->Size + bytes > BufferWrite->Capacity)
             {
                 BufferWrite->Next = (MessageStreamBuffer*)UnsafeUtility.Malloc(sizeof(MessageStreamBuffer), 0, Collections.Allocator.Persistent);
                 *BufferWrite->Next = new MessageStreamBuffer();
                 BufferWrite = BufferWrite->Next;
-                BufferWrite->Alloc(bytes < reserve ? reserve : bytes);
+                BufferWrite->Alloc(bytes < m_Reserve ? m_Reserve : bytes);
             }
         }
 
@@ -126,7 +155,7 @@ namespace Unity.Development.PlayerConnection
         }
 
         // Deallocates buffers in the list including beginNode and excluding endNode (null to free all)
-        public unsafe void FreeRange(MessageStreamBuffer* beginNode, MessageStreamBuffer* endNode)
+        private unsafe void FreeRange(MessageStreamBuffer* beginNode, MessageStreamBuffer* endNode)
         {
             MessageStreamBuffer* node = beginNode;
             while (node != endNode)
@@ -134,29 +163,25 @@ namespace Unity.Development.PlayerConnection
                 var next = node->Next;
                 TotalBytes -= node->Size;
                 node->Free();
+                UnsafeUtility.Free(node, Collections.Allocator.Persistent);
                 node = next;
             }
-
-            beginNode = null;
-            if (endNode == null)
-                BufferWrite = BufferRead;
         }
 
-        // Deallocate buffers in the list until a desired node, and if there is a buffer which is partially finished
+        // Used for send memory usage patterns (recycle without deallocation)
+        // Clear buffers in the list until a desired node, and if there is a buffer which is partially finished
         // reduce it to the remaining data only.
-        public unsafe void RecycleRange(MessageStreamBuffer* recycleUntil, int recycleUntilPlusOffset)
+        public unsafe void RecyclePartialStream(MessageStreamBuffer* recycleUntil, int recycleUntilPlusOffset)
         {
-            // @@todo - flushing the send buffer list should actually zero out the buffer nodes, but not free them since
-            // typical send buffer usage patterns are repeat each frame (profiling for instance)
             if (recycleUntil != BufferRead)
             {
-                // Free the buffer nodes after the head
-                FreeRange(BufferRead->Next, recycleUntil);
-                // then flag the head buffer empty (size = 0) so that it is always available
-                // to try to avoid defragmentation
-                TotalBytes -= BufferRead->Size;
-                BufferRead->Size = 0;
-                BufferRead->Next = recycleUntil;
+                MessageStreamBuffer* node = BufferRead;
+                while (node != recycleUntil)
+                {
+                    TotalBytes -= node->Size;
+                    node->Size = 0;
+                    node = node->Next;
+                }
             }
 
             if (recycleUntilPlusOffset > 0)
@@ -172,28 +197,23 @@ namespace Unity.Development.PlayerConnection
                 }
                 recycleUntil->Size -= recycleUntilPlusOffset;
                 TotalBytes -= recycleUntilPlusOffset;
-
-                if (recycleUntil->Size == 0)
-                {
-                    MessageStream.MessageStreamBuffer* newNext = recycleUntil->Next;
-                    FreeRange(BufferRead->Next, newNext);
-                    BufferRead->Next = newNext;
-                }
             }
+
+            if (recycleUntil == null)
+                BufferWrite = BufferRead;
         }
 
-        // Used for send memory usage patterns
-        public void RecycleAll()
+        // Used for send memory usage patterns (recycle without deallocation)
+        public unsafe void RecycleStream()
         {
-            // @@todo - recycling the send buffer list should actually zero out the buffer nodes, but not free them since
-            //          typical send buffer usage patterns are repeat each frame (profiling for instance)
-            RecycleAndFreeExtra();
+            RecyclePartialStream(null, 0);
         }
 
-        // Used for receiving memory usage patterns
-        public unsafe void RecycleAndFreeExtra()
+        // Used for receiving memory usage patterns (recycle with deallocation)
+        public unsafe void RecycleStreamAndFreeExtra()
         {
             FreeRange(BufferRead->Next, null);
+            BufferWrite = BufferRead;
             BufferRead->Size = 0;
             BufferRead->Next = null;
             TotalBytes = 0;
@@ -260,30 +280,33 @@ namespace Unity.Development.PlayerConnection
     [StructLayout(LayoutKind.Sequential)]
     internal struct MessageStreamBuilder
     {
-        public unsafe MessageStream* bufferList;
-        private unsafe MessageStream* bufferListSwap;
-        private unsafe int* deferredSizePtr;
-        private int deferredSizeStart;
-        private bool resubmitBuffer;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_AtomicStore(IntPtr ptr, IntPtr value);
 
-        public unsafe bool HasDataToSend => bufferList->TotalBytes > 0;
-        public unsafe int DataToSendBytes => bufferList->TotalBytes;
-        public unsafe int DeferredSize => (deferredSizePtr == null) ? 0 : bufferList->TotalBytes - deferredSizeStart;
-        public bool IsExternal { get; private set; }
+        [DllImport("lib_unity_zerojobs")]
+        private static extern int PlayerConnectionMt_AtomicCompareExchange(IntPtr ptr, IntPtr compare, IntPtr value);
+
+        public unsafe MessageStream* m_BufferList;
+        private unsafe MessageStream* m_BufferListSwap;
+        private unsafe int* m_DeferredSizePtr;
+        private int m_DeferredSizeStart;
+        private bool m_ResubmitStream;
+
+        public unsafe bool HasDataToSend => m_BufferList->TotalBytes > 0;
+        public unsafe int DataToSendBytes => m_BufferList->TotalBytes;
+        public unsafe int DeferredSize => (m_DeferredSizePtr == null) ? 0 : m_BufferList->TotalBytes - m_DeferredSizeStart;
 
         // Note - DON'T USE DIRECTLY
-        // Please either construct directly:
-        //   bufferSend = BufferSendManager.Create()
-        // or if already allocated (such as in a StaticShared<>) construct indirectly with
-        //   BufferSendManager.Init(&bufferSend)
-        internal unsafe MessageStreamBuilder(MessageStream* buffer, bool isExternal)
+        // Please construct by way of:
+        //   messageBuilder = MessageStreamManager.CreateStreamBuilder()
+        internal unsafe MessageStreamBuilder(MessageStream* buffer)
         {
-            bufferList = buffer;
-            bufferListSwap = bufferList;
-            deferredSizePtr = null;
-            deferredSizeStart = 0;
-            resubmitBuffer = false;
-            IsExternal = isExternal;
+            m_BufferList = buffer;
+            m_BufferList->Active = 1;
+            m_BufferListSwap = m_BufferList;
+            m_DeferredSizePtr = null;
+            m_DeferredSizeStart = 0;
+            m_ResubmitStream = false;
         }
 
         public unsafe void WriteRaw(byte* data, int dataBytes)
@@ -291,10 +314,10 @@ namespace Unity.Development.PlayerConnection
             if (dataBytes == 0)
                 return;
             if (data == null)
-                throw new ArgumentNullException("src is null in SendRaw");
-            bufferList->Allocate(dataBytes);
-            UnsafeUtility.MemCpy((void*)(bufferList->BufferWrite->Buffer + bufferList->BufferWrite->Size), data, dataBytes);
-            bufferList->UpdateSize(dataBytes);
+                throw new ArgumentNullException("'data' is null in WriteRaw");
+            m_BufferList->Allocate(dataBytes);
+            UnsafeUtility.MemCpy((void*)(m_BufferList->BufferWrite->Buffer + m_BufferList->BufferWrite->Size), data, dataBytes);
+            m_BufferList->UpdateSize(dataBytes);
         }
 
         public unsafe void WriteData<T>(T data) where T : unmanaged
@@ -304,41 +327,49 @@ namespace Unity.Development.PlayerConnection
 
         public unsafe void MessageBegin(UnityGuid messageId)
         {
-            if (deferredSizePtr != null)
+            if (m_DeferredSizePtr != null)
                 throw new InvalidOperationException("Can't defer player connection message header - previous one not patched");
 
-            // @@todo lockfree op - bufferListLocked should have been null, so an atomic set? here should be great
-            bufferListSwap = null;
+            // By making bufferListSwap NOT equivalent to bufferList, we signify "locking" the bufferList.
+            fixed (MessageStream** bufferListSwapPtr = &m_BufferListSwap)
+            {
+                PlayerConnectionMt_AtomicStore((IntPtr)bufferListSwapPtr, IntPtr.Zero);
+            }
 
             WriteData(EditorMessageIds.kMagicNumber);
             WriteData(messageId);
-            deferredSizePtr = (int*)(bufferList->BufferWrite->Buffer + bufferList->BufferWrite->Size);
+            m_DeferredSizePtr = (int*)(m_BufferList->BufferWrite->Buffer + m_BufferList->BufferWrite->Size);
             WriteData<int>(0);
             // In case the buffer was exactly full, the 32 bit size may have ended up in a new memory buffer
             // which didn't exist prior to reserving it
-            if (bufferList->BufferWrite->Size == 4)
-                deferredSizePtr = (int*)(bufferList->BufferWrite->Buffer);
-            deferredSizeStart = bufferList->TotalBytes;
+            if (m_BufferList->BufferWrite->Size == 4)
+                m_DeferredSizePtr = (int*)(m_BufferList->BufferWrite->Buffer);
+            m_DeferredSizeStart = m_BufferList->TotalBytes;
         }
 
         public unsafe void MessageEnd()
         {
-            if (deferredSizePtr == null)
+            if (m_DeferredSizePtr == null)
                 throw new InvalidOperationException("Can't patch player connection message header - nothing to patch");
 
-            while ((bufferList->TotalBytes & 3) != 0)
+            while ((m_BufferList->TotalBytes & 3) != 0)
                 WriteData((byte)0);
 
-            *deferredSizePtr = bufferList->TotalBytes - deferredSizeStart;
-            deferredSizeStart = 0;
-            deferredSizePtr = null;
+            *m_DeferredSizePtr = m_BufferList->TotalBytes - m_DeferredSizeStart;
+            m_DeferredSizeStart = 0;
+            m_DeferredSizePtr = null;
 
-            // @@todo lockfree op - bufferList should have been null, so an atomic exchange here should be great
-            bufferListSwap = bufferList;
-
-            if (resubmitBuffer)
+            // By making bufferListSwap equivalent to bufferList, we signify "unlocking" the bufferList
+            // so it can be submitted to the main thread for sending over player connection.
+            // Also, bufferListSwap is guaranteed to be null right now
+            fixed (MessageStream** bufferListSwapPtr = &m_BufferListSwap)
             {
-                TrySubmitBuffer();
+                PlayerConnectionMt_AtomicStore((IntPtr)bufferListSwapPtr, (IntPtr)m_BufferList);
+            }
+
+            if (m_ResubmitStream)
+            {
+                TrySubmitStream(false);
                 // This should always succeed...
             }
         }
@@ -350,32 +381,40 @@ namespace Unity.Development.PlayerConnection
             MessageEnd();
         }
 
-        public unsafe void TrySubmitBuffer()
+        // This can be called from potentially two threads.
+        // 1 - Main
+        // 2 - Thread owning this instance
+        public unsafe void TrySubmitStream(bool fromMainThread)
         {
-            if (bufferList->TotalBytes == 0)
+            if (m_ResubmitStream == fromMainThread)
+                return;
+            if (m_BufferList->Active == 0 || m_BufferList->TotalBytes == 0)
                 return;
 
-            MessageStream* freeBuffer = MessageStreamManager.SubmitGetFreeBuffer();
-            MessageStream* sendBuffer = bufferList;
+            MessageStream* freeStream = MessageStreamManager.SubmitGetFreeStream();
+            MessageStream* sendStream = m_BufferList;
 
-            // @@todo NOO CAS loop part for compare not null and exchange
-            //        instead compare if bufferList == bufferListLocked and if so set bufferlist
-            bool swapped = false;
-            if (bufferList == bufferListSwap)
+            // If we called MessageBegin() without calling MessageEnd() yet, bufferListSwap will be null.
+            // Otherwise, bufferList == bufferListSwap.
+            //
+            // CAS loop for bufferListSwap "compare not null and exchange" not necessary.
+            // Just compare if bufferList == bufferListSwap and if so set bufferlist.
+            fixed (MessageStream** bufferListPtr = &m_BufferList)
             {
-                bufferList = freeBuffer;
-                swapped = true;
+                m_ResubmitStream = PlayerConnectionMt_AtomicCompareExchange((IntPtr)bufferListPtr, (IntPtr)m_BufferListSwap, (IntPtr)freeStream) == 0;
             }
 
-            if (swapped)
-            {
-                MessageStreamManager.SubmitSendBuffer(sendBuffer);
-                resubmitBuffer = false;
-            }
+            // Do note that we this method will never submit the send buffer again until another iteration of MessageBegin() and MessageEnd()
+            // which will set bufferListSwap to bufferList. If using a MessageStreamBuilder without actual messages for some reason,
+            // the behavior is undefined (it just won't work - it will always be deferred)
+
+            if (m_ResubmitStream)
+                MessageStreamManager.SubmitReturnFreeStream(freeStream);
             else
             {
-                MessageStreamManager.SubmitReturnFreeBuffer(freeBuffer);
-                resubmitBuffer = true;
+                sendStream->Active = 0;
+                MessageStreamManager.SubmitSendStream(sendStream);
+                m_BufferList->Active = 1;
             }
         }
     }
@@ -383,207 +422,139 @@ namespace Unity.Development.PlayerConnection
     // THREAD SAFE
     // BURSTABLE
     //
-    // Owns all BufferSends. Externally created BufferSends (ex. SharedStatic) should be registered.
+    // Owns all MessageStreamBuilders.
     // Handles multithreaded synchronization, holding buffers for sending over player connection on main thread,
     // and maintaining/allocating replacement buffers for uninterrupted data flow while the previous set are
     // waiting on the async tcp sends to full process the data.
     [StructLayout(LayoutKind.Sequential)]
     internal struct MessageStreamManager
     {
-        [StructLayout(LayoutKind.Sequential)]
-        internal unsafe struct StreamCache
-        {
-            [StructLayout(LayoutKind.Sequential)]
-            internal unsafe struct BufferQueue
-            {
-                public MessageStream* head;
-                public MessageStream* tail;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_Init();
 
-                public void Push(MessageStream* buffer)
-                {
-                    if (Empty())
-                    {
-                        head = buffer;
-                        tail = buffer;
-                    }
-                    else
-                    {
-                        tail->next = buffer;
-                        tail = buffer;
-                    }
-                    tail->next = null;
-                }
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_Shutdown();
 
-                public MessageStream* Pop()
-                {
-                    MessageStream* node = head;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern unsafe void PlayerConnectionMt_QueueFreeStream(IntPtr messageStream);
 
-                    if (!Empty())
-                    {
-                        head = head->next;
-                        if (head == null)
-                            tail = null;
-                    }
+        [DllImport("lib_unity_zerojobs")]
+        private static extern unsafe MessageStream* PlayerConnectionMt_DequeFreeStream();
 
-                    return node;
-                }
+        [DllImport("lib_unity_zerojobs")]
+        internal static extern unsafe void PlayerConnectionMt_QueueSendStream(IntPtr messageStream);
 
-                public bool Empty()
-                {
-                    return head == null;
-                }
-            }
+        [DllImport("lib_unity_zerojobs")]
+        internal static extern unsafe MessageStream* PlayerConnectionMt_DequeSendStream();
 
-            // @@todo these queues should be mpmc queues (sendqueue might be able to be mpsc)
-            // @@todo reorganize freequeue so Buffers have only one BufferNode in list and other
-            //        buffernodes can be acquired from another queue ... this way we are
-            //        1) Recycling BufferNode's (where the actual allocations exist)
-            //        2) Only swapping higher level Buffer's in and out for lock free submission to playerconnection to send
+        [DllImport("lib_unity_zerojobs")]
+        private static extern int PlayerConnectionMt_IsAvailableSendStream();
 
-            public int allSendsCount;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern unsafe MessageStreamBuilder** PlayerConnectionMt_LockStreamBuilders();
 
-            public BufferQueue sendQueue;
-            public BufferQueue freeQueue;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_UnlockStreamBuilders();
 
-            public MessageStreamBuilder** allSends;
-            public const int kAllSendsMax = 1024;
-        }
+        [DllImport("lib_unity_zerojobs")]
+        private static extern unsafe void PlayerConnectionMt_RegisterStreamBuilder(IntPtr messageStreamBuilder);
 
-        public static readonly SharedStatic<StreamCache> bufferQueue = 
-            SharedStatic<StreamCache>.GetOrCreate<MessageStreamManager, StreamCache>();
-        public unsafe static bool HasDataToSend => bufferQueue.Data.sendQueue.head != null;
-        private const int kInitialCapacity = 8192;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern unsafe void PlayerConnectionMt_UnregisterStreamBuilder(IntPtr messageStreamBuilder);
+
+        public unsafe static bool HasDataToSend => PlayerConnectionMt_IsAvailableSendStream() == 1;
+        private const int k_InitialCapacity = 8192;
 
         //---------------------------------------------------------------------------------------------------
         // Lifetime
         //---------------------------------------------------------------------------------------------------
         public unsafe static void Initialize()
         {
-            bufferQueue.Data.allSends = (MessageStreamBuilder**)UnsafeUtility.Malloc(StreamCache.kAllSendsMax * IntPtr.Size, 0, Collections.Allocator.Persistent);
+            PlayerConnectionMt_Init();
         }
 
         public unsafe static void Shutdown()
         {
-            // allSends
-            for (int i = 0; i < bufferQueue.Data.allSendsCount; i++)
+            // Free all stream builders
+            MessageStreamBuilder** allBuilders = PlayerConnectionMt_LockStreamBuilders();
+            if (allBuilders != null)
             {
-                bufferQueue.Data.allSends[i]->bufferList->Free();
-                if (!bufferQueue.Data.allSends[i]->IsExternal)
-                    UnsafeUtility.Free(bufferQueue.Data.allSends[i], Collections.Allocator.Persistent);
+                while (*allBuilders != null)
+                {
+                    (*allBuilders)->m_BufferList->Free();
+                    UnsafeUtility.Free((*allBuilders)->m_BufferList, Collections.Allocator.Persistent);
+                    UnsafeUtility.Free(*allBuilders, Collections.Allocator.Persistent);
+                    allBuilders++;
+                }
             }
-            bufferQueue.Data.allSendsCount = 0;
+            PlayerConnectionMt_UnlockStreamBuilders();
 
-            UnsafeUtility.Free(bufferQueue.Data.allSends, Collections.Allocator.Persistent);
-            bufferQueue.Data.allSends = null;
-
-            // sendQueue
-            while (!bufferQueue.Data.sendQueue.Empty())
-            {
-                MessageStream* buffer = bufferQueue.Data.sendQueue.Pop();
-                buffer->Free();
-            }
-            bufferQueue.Data.sendQueue = new StreamCache.BufferQueue();
-
-            // freeQueue
-            while (!bufferQueue.Data.freeQueue.Empty())
-            {
-                MessageStream* buffer = bufferQueue.Data.freeQueue.Pop();
-                buffer->Free();
-            }
-            bufferQueue.Data.freeQueue = new StreamCache.BufferQueue();
+            PlayerConnectionMt_Shutdown();
         }
 
-        public unsafe static MessageStreamBuilder* CreateBufferSend()
+        public unsafe static MessageStreamBuilder* CreateStreamBuilder()
         {
             MessageStreamBuilder* buffer = (MessageStreamBuilder*)UnsafeUtility.Malloc(sizeof(MessageStreamBuilder), 0, Collections.Allocator.Persistent);
-            RegisterBufferSend(buffer, false);
+            PlayerConnectionMt_RegisterStreamBuilder((IntPtr)buffer);
+            *buffer = new MessageStreamBuilder(SubmitGetFreeStream());
             return buffer;
         }
 
-        public unsafe static void DestroyBufferSend(MessageStreamBuilder *buffer)
+        public unsafe static void DestroyStreamBuilder(MessageStreamBuilder* buffer)
         {
-            if (!buffer->IsExternal)
-                UnsafeUtility.Free(buffer, Collections.Allocator.Persistent);
-
-            bufferQueue.Data.allSendsCount--;
-
-            for (int i = 0; i < bufferQueue.Data.allSendsCount; i++)
-            {
-                if (bufferQueue.Data.allSends[i] == buffer)
-                {
-                    bufferQueue.Data.allSends[i] = bufferQueue.Data.allSends[bufferQueue.Data.allSendsCount];
-                    break;
-                }
-            }
-        }
-
-        public unsafe static void RegisterExternalBufferSend(MessageStreamBuilder* buffer)
-        {
-            RegisterBufferSend(buffer, true);
-        }
-
-        private unsafe static void RegisterBufferSend(MessageStreamBuilder* buffer, bool isExternal)
-        {
-            //@@todo atomic inc?
-            int index = bufferQueue.Data.allSendsCount++;
-
-            bufferQueue.Data.allSends[index] = buffer;
-            *buffer = new MessageStreamBuilder(SubmitGetFreeBuffer(), isExternal);
+            UnsafeUtility.Free(buffer, Collections.Allocator.Persistent);
+            PlayerConnectionMt_UnregisterStreamBuilder((IntPtr)buffer);
         }
 
 
         //---------------------------------------------------------------------------------------------------
         // Send Queue
         //---------------------------------------------------------------------------------------------------
-        public static void TrySubmitAll()
+        public unsafe static void TrySubmitAll()
         {
-            int count = bufferQueue.Data.allSendsCount;
-            for (int i = 0; i < count; i++)
+            MessageStreamBuilder** allBuilders = PlayerConnectionMt_LockStreamBuilders();
+            while (*allBuilders != null)
             {
-                unsafe
-                {
-                    bufferQueue.Data.allSends[i]->TrySubmitBuffer();
-                }
+                (*allBuilders)->TrySubmitStream(true);
+                allBuilders++;
             }
+            PlayerConnectionMt_UnlockStreamBuilders();
         }
 
-        public unsafe static MessageStream* SubmitGetFreeBuffer()
+        public unsafe static MessageStream* SubmitGetFreeStream()
         {
-            if (!bufferQueue.Data.freeQueue.Empty())
-            {
-                return bufferQueue.Data.freeQueue.Pop();
-            }
+            MessageStream* stream = PlayerConnectionMt_DequeFreeStream();
+            if (stream != null)
+                return stream;
             
-            MessageStream* buffer = (MessageStream*)UnsafeUtility.Malloc(sizeof(MessageStream), 0, Collections.Allocator.Persistent);
-            *buffer = new MessageStream(kInitialCapacity);
-            return buffer;
+            stream = (MessageStream*)UnsafeUtility.Malloc(sizeof(MessageStream), 0, Collections.Allocator.Persistent);
+            *stream = new MessageStream(k_InitialCapacity);
+            return stream;
         }
 
-        public unsafe static void SubmitReturnFreeBuffer(MessageStream* buffer)
+        public unsafe static void SubmitReturnFreeStream(MessageStream* stream)
         {
-            bufferQueue.Data.freeQueue.Push(buffer);
+            PlayerConnectionMt_QueueFreeStream((IntPtr)stream);
         }
 
-        public unsafe static void SubmitSendBuffer(MessageStream* buffer)
+        public unsafe static void SubmitSendStream(MessageStream* stream)
         {
-            bufferQueue.Data.sendQueue.Push(buffer);
+            PlayerConnectionMt_QueueSendStream((IntPtr)stream);
         }
 
-        public unsafe static void RecycleBuffer(MessageStream *buffer)
+        public unsafe static void RecycleStream(MessageStream *stream)
         {
-            buffer->RecycleAll();
-            bufferQueue.Data.freeQueue.Push(buffer);
+            stream->RecycleStream();
+            PlayerConnectionMt_QueueFreeStream((IntPtr)stream);
         }
 
         public unsafe static void RecycleAll()
         {
-            // @@todo also check allSends?
-
             // Instead of queuing for send, we just erase what's there
-            while (!bufferQueue.Data.sendQueue.Empty())
+            while (HasDataToSend)
             {
-                MessageStream* buffer = bufferQueue.Data.sendQueue.Pop();
-                RecycleBuffer(buffer);
+                MessageStream* stream = PlayerConnectionMt_DequeSendStream();
+                RecycleStream(stream);
             }
         }
     }

@@ -26,38 +26,6 @@ public static class NativeJobsPrebuiltLibrary
         return ArtifactPaths[name];
     }
 
-    private static string GetNativeJobsReleaseArchName(NativeProgramConfiguration npc)
-    {
-        // We need to detect which emscripten backend to use on web builds, but it is only available if the 
-        // com.unity.platforms.web package is in the project manifest. Otherwise, we just default to false
-        // as it is irrelevant.
-        var tinyEmType = Type.GetType("TinyEmscripten");
-        bool useWasmBackend = (bool)(tinyEmType?.GetProperty("UseWasmBackend")?.GetValue(tinyEmType) ?? false);
-        switch (npc.Platform)
-        {
-            case MacOSXPlatform _:
-                if (npc.ToolChain.Architecture.IsX64) return "mac64";
-                break;
-            case WindowsPlatform _:
-                if (npc.ToolChain.Architecture.IsX86) return "win32";
-                if (npc.ToolChain.Architecture.IsX64) return "win64";
-                break;
-            default:
-                if (npc.ToolChain.Architecture.IsX86) return "x86";
-                if (npc.ToolChain.Architecture.IsX64) return "x64";
-                if (npc.ToolChain.Architecture.IsArmv7) return "arm32";
-                if (npc.ToolChain.Architecture.IsArm64) return "arm64";
-                if (npc.ToolChain.Architecture is WasmArchitecture && useWasmBackend) return "wasm";
-                if (npc.ToolChain.Architecture is WasmArchitecture && !useWasmBackend) return "wasm_fc";
-                if (npc.ToolChain.Architecture is AsmJsArchitecture && useWasmBackend) return "asmjs";
-                if (npc.ToolChain.Architecture is AsmJsArchitecture && !useWasmBackend) return "asmjs_fc";
-                //if (npc.ToolChain.Architecture is WasmArchitecture && HAS_THREADING) return "wasm_withthreads";
-                break;
-        }
-
-        throw new InvalidProgramException($"Unknown toolchain and architecture for baselib: {npc.ToolChain.LegacyPlatformIdentifier} {npc.ToolChain.Architecture.Name}");
-    }
-
     private static string GetNativeJobsConfigName(NativeProgramConfiguration npc)
     {
         var dotsrtCSharpConfig = ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig;
@@ -67,15 +35,32 @@ public static class NativeJobsPrebuiltLibrary
         if (dotsrtCSharpConfig.EnableUnityCollectionsChecks && dotsrtCSharpConfig.DotsConfiguration == DotsConfiguration.Release)
             return DotsConfiguration.Develop.ToString().ToLower();
 
+        // If building a debug build, make it a develop build so help with performance issues esp. regarding the Job Debugger.
+        // Comment this out for an actual debug build if necessary.
+        if (dotsrtCSharpConfig.DotsConfiguration == DotsConfiguration.Debug)
+            return DotsConfiguration.Develop.ToString().ToLower();
+
         return dotsrtCSharpConfig.DotsConfiguration.ToString().ToLower();
     }
 
-    private static NPath GetLibPath(NativeProgramConfiguration c)
+    private static string GetTargetName(NativeProgramConfiguration c)
     {
+        // Look for this type from reference platforms package - if it doesn't exist we aren't building for web
         var tinyEmType = Type.GetType("TinyEmscripten");
         bool useWasmBackend = (bool)(tinyEmType?.GetProperty("UseWasmBackend")?.GetValue(tinyEmType) ?? false);
         bool useWebGlThreading = false;
 
+        // Matches logic nativejobs/BuildUtils.bee.cs
+        string targetName = c.ToolChain.Platform.DisplayName + "_" + c.ToolChain.Architecture.DisplayName;
+        if (c.Platform.Name == "WebGL" && !useWasmBackend)
+            targetName += "_fc";
+        if (useWebGlThreading)
+            targetName += "_withthreads";
+        return targetName.ToLower();
+    }
+
+    private static NPath GetLibPath(NativeProgramConfiguration c)
+    {
         var staticPlatforms = new[]
         {
             "IOS",
@@ -84,13 +69,12 @@ public static class NativeJobsPrebuiltLibrary
 
         if (UseLocalDev)
         {
-            return LocalDevRoot.Combine("artifacts", "nativejobs", GetNativeJobsConfigName(c) + "_" + c.ToolChain.ActionName.ToLower() +
-                (c.Platform.Name == "WebGL" && !useWasmBackend ? "_fc" : "") + (useWebGlThreading ? "_withthreads" : "") + "_nonlump" +
-                (staticPlatforms.Contains(c.Platform.Name) ? "" : "_dll"));
+            return LocalDevRoot.Combine("artifacts", "nativejobs", GetNativeJobsConfigName(c) + "_" + GetTargetName(c) +
+                "_nonlump" + (staticPlatforms.Contains(c.Platform.Name) ? "" : "_dll"));
         }
 
         var prebuiltLibPath = GetOrCreateSteveArtifactPath($"nativejobs-{c.Platform.Name}" + (staticPlatforms.Contains(c.Platform.Name) ? "-s" : "-d"));
-        return prebuiltLibPath.Combine("lib", c.Platform.Name.ToLower(), GetNativeJobsReleaseArchName(c), GetNativeJobsConfigName(c));
+        return prebuiltLibPath.Combine("lib", GetTargetName(c), GetNativeJobsConfigName(c));
     }
 
     public static void AddToNativeProgram(NativeProgram np)

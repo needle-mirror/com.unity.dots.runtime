@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 using Unity.Entities.Serialization;
-using Unity.Tiny.Codec;
+using Unity.Core.Compression;
 
 namespace Unity.Entities.Runtime
 {

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 using Unity.Burst;
 #if !NET_DOTS
@@ -18,7 +18,7 @@ namespace UnityEngine.Assertions
         static unsafe void Failure()
         {
             // Take assertion at "real value": an Assert should *never* fire.
-            // If in debug w/ GUARD_HEAP (the default) AssertHeap will crash the program (with a call stack in the debugger.)
+            // If in debug w/ ENABLE_UNITY_COLLECTIONS_CHECKS (the default) AssertHeap will crash the program (with a call stack in the debugger.)
             // As a fallback, throw an exception. Note that so much code catches exceptions this can hide Asserts.
             UnsafeUtility.AssertHeap(null);
             throw new Exception("Exception caused by internal assert.");
@@ -36,7 +36,7 @@ namespace UnityEngine.Assertions
         {
             if (one != two) Failure();
         }
-        
+
         [BurstDiscard]
         public static void AreEqual(float one, float two)
         {
@@ -47,7 +47,7 @@ namespace UnityEngine.Assertions
         {
             if (one.Equals(two)) Failure();
         }
-        
+
         [BurstDiscard]
         public static void AreNotEqual(int one, int two)
         {
@@ -75,6 +75,20 @@ namespace UnityEngine.Assertions
         [BurstDiscard]
         public static void AreApproximatelyEqual(object one, object two, object three = null, object msg =null)
         {
+        }
+
+        [BurstDiscard]
+        public static void IsNull(object obj)
+        {
+            if (!ReferenceEquals(null, obj))
+                Failure();
+        }
+
+        [BurstDiscard]
+        public static void IsNotNull(object obj)
+        {
+            if (ReferenceEquals(null, obj))
+                Failure();
         }
     }
 }

@@ -80,6 +80,7 @@ static class TypeRegistrationTool
             dotsConfig.ScriptingBackend == ScriptingBackend.Dotnet ? "DOTSDotNet" : "DOTSNative",
             dotsConfig.UseBurst ? "Bursted" : "Unbursted",
             dotsConfig.Identifier.Contains("release") ? "release" : "debug", // We check for 'release' so we can generate 'debug' info for both debug and develop configs
+            dotsConfig.MultiThreadedJobs ? "Multithreaded" : "Singlethreaded",
             inputAssemblies.OrderByDependencies().Select(p => p.Path.MakeAbsolute().QuoteForProcessStart())
         }.ToArray();
 

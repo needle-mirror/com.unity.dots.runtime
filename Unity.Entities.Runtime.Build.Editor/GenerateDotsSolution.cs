@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Unity.Assertions;
 using Unity.Build;
+using Unity.Build.DotsRuntime;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEditorInternal;
@@ -764,8 +765,14 @@ namespace Unity.Entities.Runtime.Build
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities()))
                             steps.Add(typeof(BuildStepExportEntities));
 
+                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities2()))
+                            steps.Add(typeof(BuildStepExportEntities2));
+
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration()))
                             steps.Add(typeof(BuildStepExportConfiguration));
+
+                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration2()))
+                            steps.Add(typeof(BuildStepExportConfiguration2));
 
                         steps.Add(typeof(BuildStepGenerateBeeFiles));
 

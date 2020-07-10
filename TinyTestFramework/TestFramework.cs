@@ -1,6 +1,22 @@
 using System;
 using Unity.Collections.LowLevel.Unsafe;
 
+namespace NUnit.Framework.Interfaces
+{
+    public interface ITestBuilder
+    {
+    }
+}
+
+namespace NUnit.Framework.Internal
+{
+}
+
+namespace NUnit.Framework.Internal.Builders
+{
+
+}
+
 namespace NUnit.Framework
 {
     public class AssertionException : Exception
@@ -24,6 +40,7 @@ namespace NUnit.Framework
         public ExplicitAttribute(string msg) {}
     }
 
+    [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
     public class TestFixtureAttribute : Attribute
     {
     }
@@ -36,15 +53,13 @@ namespace NUnit.Framework
     {
     }
 
-    /* These are intentionally *NOT* supported, so
-       the code won't compile. If OneTimeSetUp and
-       OneTimeTearDown get added, code needs to be
-       added to TestCaseILPP
-
-    public class OneTimeSetUp : Attribute {}
-    public class OneTimeTearDown : Attribute {}
-
-    */
+    public class OneTimeSetUpAttribute : Attribute 
+    {
+    }
+    
+    public class OneTimeTearDownAttribute : Attribute
+    {
+    }
 
     public class IgnoreAttribute : Attribute
     {
@@ -75,6 +90,10 @@ namespace NUnit.Framework
         public RangeAttribute(int a, int b) {}
     }
 
+    public class TestCaseAttribute : TestAttribute
+    {
+
+    }
 
     public delegate void TestDelegate();
 

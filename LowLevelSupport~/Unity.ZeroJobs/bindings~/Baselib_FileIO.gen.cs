@@ -28,24 +28,40 @@ namespace Unity.Baselib.LowLevel
         {
             public IntPtr handle;
         }
-        public enum Baselib_FileIO_OpenFlags : UInt64 // Baselib_FileIO_OpenFlags_t
+        public enum Baselib_FileIO_OpenFlags : UInt32 // Baselib_FileIO_OpenFlags_t
         {
-            Baselib_FileIO_FileFlags_Read = 0x1,
-            Baselib_FileIO_FileFlags_Write = 0x2,
-            /// <summary>when specifying this flag, Baselib_FileIO_FileFlags_Write must be specified</summary>
-            Baselib_FileIO_FileFlags_CreateIfDoesntExist = 0x4,
-            Baselib_FileIO_FileFlags_CreateAlways = 0x8,
+            /// <summary>Allows read access to the file.</summary>
+            Read = 0x1,
+            /// <summary>Allows write access to the file.</summary>
+            Write = 0x2,
+            /// <summary>
+            /// Opens existing file without changes or creates 0 size file if file doesn't exist.
+            /// On some platforms open will implicitly add write flag if required by native API's.
+            /// </summary>
+            OpenAlways = 0x4,
+            /// <summary>
+            /// Always creates 0 size file.
+            /// On some platforms open will implicitly add write flag if required by native API's.
+            /// </summary>
+            CreateAlways = 0x8,
         }
         /// <summary>File IO read request.</summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct Baselib_FileIO_ReadRequest
         {
-            /// <summary>Offset in a file to read from.</summary>
+            /// <summary>
+            /// Offset in a file to read from.
+            /// If offset+size is pointing pass EOF, will read up to EOF bytes.
+            /// If offset is pointing pass EOF, will read 0 bytes.
+            /// </summary>
             public UInt64 offset;
             /// <summary>Buffer to read to, must be available for duration of operation.</summary>
             public IntPtr buffer;
-            /// <summary>Size of requested read, please note this it's 32 bit value.</summary>
-            public UInt32 size;
+            /// <summary>
+            /// Size of requested read.
+            /// If 0 is passed will read 0 bytes and raise no error.
+            /// </summary>
+            public UInt64 size;
         }
         /// <summary>
         /// File IO priorities.
@@ -87,8 +103,8 @@ namespace Unity.Baselib.LowLevel
         [StructLayout(LayoutKind.Sequential)]
         public struct Baselib_FileIO_EventQueue_Result_ReadFile
         {
-            /// <summary>Bytes transfered during read, please note it's 32 bit value.</summary>
-            public UInt32 bytesTransfered;
+            /// <summary>Bytes transferred during read.</summary>
+            public UInt64 bytesTransferred;
         }
         /// <summary>Event queue result.</summary>
         [StructLayout(LayoutKind.Explicit)]
@@ -103,11 +119,11 @@ namespace Unity.Baselib.LowLevel
             /// <summary>Error state of the operation.</summary>
             [FieldOffset(16)]
             public Baselib_ErrorState errorState;
-            [FieldOffset(56)]
+            [FieldOffset(64)]
             public Baselib_FileIO_EventQueue_Result_Callback callback;
-            [FieldOffset(56)]
+            [FieldOffset(64)]
             public Baselib_FileIO_EventQueue_Result_OpenFile openFile;
-            [FieldOffset(56)]
+            [FieldOffset(64)]
             public Baselib_FileIO_EventQueue_Result_ReadFile readFile;
         }
         /// <summary>Creates event queue.</summary>
@@ -219,19 +235,41 @@ namespace Unity.Baselib.LowLevel
         /// <summary>Synchronously opens a file.</summary>
         /// <remarks>
         /// Will try use the most open access permissions options that are available for each platform.
-        /// If you require more strict options, please use our platform specific SyncOpenFromXXX functions.
+        /// Meaning it might be possible for other process to write to file opened via this API.
+        /// On most platforms file can be simultaneously opened with different open flags.
+        /// If you require more strict options, or platform specific access configuration, please use Baselib_FileIO_SyncFileFromNativeHandle.
         ///
         /// Possible error codes:
-        /// - InvalidArgument:            Invalid argument was passed.
-        /// - IOError:                    Generic IO error occured.
+        /// - InvalidArgument:             Invalid argument was passed.
+        /// - RequestedAccessIsNotAllowed: Request access is not allowed.
+        /// - IOError:                     Generic IO error occured.
         /// </remarks>
         /// <param name="pathname">Platform defined pathname to open.</param>
-        /// <param name="openFlags">Open flags.</param>
-        /// <param name="createFileSize">When file needs to be created, because of a create flag is passed, will use this file size.</param>
-        /// <param name="outFileSize">Opened file size.</param>
+        /// <param name="openFlags">
+        /// Open flags.
+        /// If file is created because one of Create flags is passed, it will have size of 0 bytes.
+        /// </param>
         /// <returns>SyncFile handle.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern Baselib_FileIO_SyncFile Baselib_FileIO_SyncOpen(byte* pathname, Baselib_FileIO_OpenFlags openFlags, UInt64 createFileSize, UInt64* outFileSize, Baselib_ErrorState* errorState);
+        public static extern Baselib_FileIO_SyncFile Baselib_FileIO_SyncOpen(byte* pathname, Baselib_FileIO_OpenFlags openFlags, Baselib_ErrorState* errorState);
+        /// <summary>Transfer ownership of native handle to Baselib_FileIO_SyncFile handle.</summary>
+        /// <remarks>
+        /// This function transfers ownership, meaning you don't need to close native handle yourself,
+        /// instead returned SyncFile must closed via Baselib_FileIO_SyncClose.
+        /// Implementations might cache information about the file state,
+        /// so native handle shouldn't be used after transfering ownership.
+        /// </remarks>
+        /// <param name="handle">
+        /// Platform defined native handle.
+        /// If invalid native handle is passed, will return Baselib_FileIO_SyncFile_Invalid.
+        /// </param>
+        /// <param name="type">
+        /// Platform defined native handle type from Baselib_FileIO_NativeHandleType enum.
+        /// If unsupported type is passed, will return Baselib_FileIO_SyncFile_Invalid.
+        /// </param>
+        /// <returns>SyncFile handle.</returns>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern Baselib_FileIO_SyncFile Baselib_FileIO_SyncFileFromNativeHandle(UInt64 handle, UInt32 type);
         /// <summary>Synchronously reads data from a file.</summary>
         /// <remarks>
         /// Possible error codes:
@@ -240,17 +278,21 @@ namespace Unity.Baselib.LowLevel
         /// </remarks>
         /// <param name="file">
         /// File to read from.
-        /// If invalid file handle is passed, will no-op.
+        /// If invalid file handle is passed, will raise InvalidArgument error and return 0.
         /// </param>
-        /// <param name="offset">Offset in the file to read data at.</param>
+        /// <param name="offset">
+        /// Offset in the file to read data at.
+        /// If offset+size goes past end-of-file (EOF), function will read until EOF.
+        /// If offset points past EOF, will return 0.
+        /// </param>
         /// <param name="buffer">Pointer to data to read into.</param>
         /// <param name="size">
         /// Size of data to read.
-        /// Note size is uint32_t which means we can read at most 4GB in one operation.
+        /// If 0 is passed, will return 0 bytes read and no error.
         /// </param>
         /// <returns>Amount of bytes read.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern UInt32 Baselib_FileIO_SyncRead(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt32 size, Baselib_ErrorState* errorState);
+        public static extern UInt64 Baselib_FileIO_SyncRead(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt64 size, Baselib_ErrorState* errorState);
         /// <summary>Synchronously writes data to a file.</summary>
         /// <remarks>
         /// Possible error codes:
@@ -259,20 +301,20 @@ namespace Unity.Baselib.LowLevel
         /// </remarks>
         /// <param name="file">
         /// File to write to.
-        /// If invalid file handle is passed, will no-op.
+        /// If invalid file handle is passed, will raise InvalidArgument error and return 0.
         /// </param>
         /// <param name="offset">
         /// Offset in the file to write data at.
-        /// if offset+size goes past end-of-file, then file will be resized.
+        /// If offset+size goes past end-of-file (EOF), then file will be resized.
         /// </param>
         /// <param name="buffer">Pointer to data to write.</param>
         /// <param name="size">
         /// Size of data to write.
-        /// Note size is uint32_t which means we can write at most 4GB in one operation.
+        /// If 0 is passed, will return 0 bytes written and no error.
         /// </param>
         /// <returns>Amount of bytes written.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern UInt32 Baselib_FileIO_SyncWrite(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt32 size, Baselib_ErrorState* errorState);
+        public static extern UInt64 Baselib_FileIO_SyncWrite(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt64 size, Baselib_ErrorState* errorState);
         /// <summary>Synchronously flushes file buffers.</summary>
         /// <remarks>
         /// Operating system might buffer some write operations.
@@ -288,11 +330,38 @@ namespace Unity.Baselib.LowLevel
         /// </param>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void Baselib_FileIO_SyncFlush(Baselib_FileIO_SyncFile file, Baselib_ErrorState* errorState);
-        /// <summary>
-        /// Synchronously closes a file.
-        /// Please note that closing a file does not guarantee file buffers flush.
-        /// </summary>
+        /// <summary>Synchronously changes file size.</summary>
         /// <remarks>
+        /// Possible error codes:
+        /// - InvalidArgument:            Invalid argument was passed.
+        /// - IOError:                    Generic IO error occured.
+        /// </remarks>
+        /// <param name="file">
+        /// File to get size of.
+        /// If invalid file handle is passed, will raise invalid argument error.
+        /// </param>
+        /// <param name="size">New file size.</param>
+        /// <returns>File size.</returns>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void Baselib_FileIO_SyncSetFileSize(Baselib_FileIO_SyncFile file, UInt64 size, Baselib_ErrorState* errorState);
+        /// <summary>Synchronously retrieves file size.</summary>
+        /// <remarks>
+        /// Possible error codes:
+        /// - InvalidArgument:            Invalid argument was passed.
+        /// - IOError:                    Generic IO error occured.
+        /// </remarks>
+        /// <param name="file">
+        /// File to get size of.
+        /// If invalid file handle is passed, will return 0.
+        /// </param>
+        /// <returns>File size.</returns>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern UInt64 Baselib_FileIO_SyncGetFileSize(Baselib_FileIO_SyncFile file, Baselib_ErrorState* errorState);
+        /// <summary>Synchronously closes a file.</summary>
+        /// <remarks>
+        /// Close does not guarantee that the data was written to disk,
+        /// Please use Baselib_FileIO_SyncFlush to guarantee (best effort) that data was written to disk.
+        ///
         /// Possible error codes:
         /// - InvalidArgument:            Invalid argument was passed.
         /// - IOError:                    Generic IO error occured.

@@ -1,8 +1,9 @@
 using System;
-#if UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
+#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
 using Unity.Development.PlayerConnection;
 #endif
 using Unity.Platforms;
+using Unity.Core;
 
 namespace Unity.Tiny.EntryPoint
 {
@@ -10,6 +11,9 @@ namespace Unity.Tiny.EntryPoint
     {
         private static void Main()
         {
+#if UNITY_DOTSRUNTIME
+            DotsRuntime.Initialize();
+#endif
             var unity = UnityInstance.Initialize();
 
             unity.OnTick = () =>
@@ -22,11 +26,27 @@ namespace Unity.Tiny.EntryPoint
                 return shouldContinue;
             };
 
-#if UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
+#if UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER && !UNITY_WEBGL
             DebuggerAttachDialog.Show(Connection.TransmitAndReceive);
 #endif
 
             RunLoop.EnterMainLoop(unity.OnTick);
+
+            // Anything which can come after EnterMainLoop must occur in an event because
+            // on some platforms EnterMainLoop exits immediately and events drive the application
+            // lifecycle.
+#if UNITY_DOTSRUNTIME
+            // Currently this only works on mobile, but eventually all platforms should use this path
+#if UNITY_ANDROID || UNITY_IOS
+            PlatformEvents.OnQuit += (object sender, QuitEvent evt) => { DotsRuntime.Shutdown(); };
+#else
+            DotsRuntime.Shutdown();
+#endif
+#if UNITY_DOTSRUNTIME_TRACEMALLOCS
+            var leaks = Unity.Collections.LowLevel.Unsafe.UnsafeUtility.DebugGetAllocationsByCount();
+            UnityEngine.Assertions.Assert.IsTrue(leaks.Count == 0);
+#endif
+#endif
         }
     }
 }

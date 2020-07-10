@@ -14,7 +14,8 @@ namespace Unity.Entities.Runtime.Build
     /// </summary>
     public abstract partial class ConfigurationSystemBase : SystemBase
     {
-        public Scene projectScene;
-        public BuildConfiguration buildConfiguration;
+        public Scene ProjectScene;
+        public BuildConfiguration BuildConfiguration;
+        public BuildAssemblyCache AssemblyCache;
     }
 }

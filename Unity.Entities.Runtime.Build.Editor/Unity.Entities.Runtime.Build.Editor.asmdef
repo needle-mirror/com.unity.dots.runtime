@@ -2,13 +2,11 @@
     "name": "Unity.Entities.Runtime.Build.Editor",
     "references": [
         "Unity.Build",
-        "Unity.Build.Common",
         "Unity.Build.DotsRuntime",
         "Unity.Build.Editor",
         "Unity.Dots.TestRunner.Editor",
         "Unity.Entities",
-        "Unity.Entities.Runtime.Build",
-        "Unity.Platforms"
+        "Unity.Entities.Runtime.Build"
     ],
     "includePlatforms": [
         "Editor"

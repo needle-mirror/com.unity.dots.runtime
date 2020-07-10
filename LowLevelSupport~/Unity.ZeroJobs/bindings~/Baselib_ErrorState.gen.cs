@@ -18,6 +18,19 @@ namespace Unity.Baselib.LowLevel
             /// <summary>All platform error codes types must be bigger or equal to this value.</summary>
             PlatformDefined = 0x1,
         }
+        /// <summary>Extra information type.</summary>
+        public enum Baselib_ErrorState_ExtraInformationType : byte // Baselib_ErrorState_ExtraInformationType_t
+        {
+            /// <summary>Extra information is not present.</summary>
+            None = 0x0,
+            /// <summary>
+            /// Extra information is a pointer of const char* type.
+            /// Pointer guaranteed to be valid for lifetime of the program (static strings, buffers, etc).
+            /// </summary>
+            StaticString = 0x1,
+            /// <summary>Extra information is a generation counter to ErrorState internal static buffer.</summary>
+            GenerationCounter = 0x2,
+        }
         /// <summary>Baselib error information.</summary>
         /// <remarks>
         /// All functions that expect a pointer to a error state object will *not* allow to pass a nullptr for it
@@ -27,10 +40,12 @@ namespace Unity.Baselib.LowLevel
         [StructLayout(LayoutKind.Sequential)]
         public struct Baselib_ErrorState
         {
+            public Baselib_SourceLocation sourceLocation;
+            public UInt64 nativeErrorCode;
+            public UInt64 extraInformation;
             public Baselib_ErrorCode code;
             public Baselib_ErrorState_NativeErrorCodeType nativeErrorCodeType;
-            public UInt64 nativeErrorCode;
-            public Baselib_SourceLocation sourceLocation;
+            public Baselib_ErrorState_ExtraInformationType extraInformationType;
         }
         public enum Baselib_ErrorState_ExplainVerbosity : Int32
         {

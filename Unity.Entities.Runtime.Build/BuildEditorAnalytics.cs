@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
+using Unity.Build.DotsRuntime;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Analytics;
@@ -25,6 +26,8 @@ namespace Unity.Entities.Runtime.Build
         };
 
         static readonly HashSet<int> s_OnceHashCodes = new HashSet<int>();
+
+        static BuildAssemblyCache s_AssemblyCache = new BuildAssemblyCache();
 
         static BuildEditorAnalytics()
         {
@@ -141,12 +144,18 @@ namespace Unity.Entities.Runtime.Build
             if (result == null)
                 return default;
 
+            if (!result.BuildConfiguration.TryGetComponent<DotsRuntimeRootAssembly>(out var rootAssembly))
+                return default;
+
             if (!result.BuildConfiguration.TryGetComponent<DotsRuntimeBuildProfile>(out var profile))
                 return default;
 
             var unityAssembliesInProject = new List<string>();
 
-            foreach (var assembly in profile.TypeCache.Assemblies)
+            s_AssemblyCache.BaseAssemblies = rootAssembly.RootAssembly.asset;
+            s_AssemblyCache.PlatformName = profile.Target.UnityPlatformName;
+
+            foreach (var assembly in s_AssemblyCache.Assemblies)
             {
                 // find the asset that corresponds to the thing that was built
                 var pkg = UnityEditor.PackageManager.PackageInfo.FindForAssembly(assembly);

@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using UnityEngine.Assertions;
 #if ENABLE_PLAYERCONNECTION
 using Unity.Development.PlayerConnection;
+using UnityEngine.Scripting;
 #endif
 #if !NET_DOTS
 using System.Text.RegularExpressions;
@@ -13,11 +14,6 @@ namespace UnityEngine
 {
     public static class Debug
     {
-        // for testing
-        internal static string lastLog;
-        internal static string lastWarning;
-        internal static string lastError;
-
         private static string MessageObjectToString(object message)
         {
             if (message == null)
@@ -39,8 +35,11 @@ namespace UnityEngine
         }
 
         [Conditional("DEBUG")]
-        private static void LogInternal(string message)
+        private static void LogInternal(LogType type, string message)
         {
+#if DEBUG
+            UnityEngine.TestTools.LogAssert.CheckExpected(type, message);
+#endif
 #if ENABLE_PLAYERCONNECTION
             Logger.Log(message);
 #endif
@@ -50,29 +49,45 @@ namespace UnityEngine
         [Conditional("DEBUG")]
         public static void Log(object message)
         {
-            lastLog = MessageObjectToString(message);
-            LogInternal(lastLog);
+            LogInternal(LogType.Log, MessageObjectToString(message));
         }
 
         [Conditional("DEBUG")]
         public static void LogWarning(object message)
         {
-            lastWarning = MessageObjectToString(message);
-            LogInternal(lastWarning);
+            LogInternal(LogType.Warning, MessageObjectToString(message));
         }
 
         [Conditional("DEBUG")]
         public static void LogError(object message)
         {
-            lastError = $"LogError: {MessageObjectToString(message)}";
-            LogInternal(lastError);
+            LogInternal(LogType.Error, $"LogError: {MessageObjectToString(message)}");
+        }
+
+        [Conditional("DEBUG")]
+        public static void LogAssertion(object message)
+        {
+            LogError(message);
         }
 
         [Conditional("DEBUG")]
         public static void LogException(Exception exception)
         {
-            lastLog = "Exception";
-            LogInternal(exception.Message + "\n" + exception.StackTrace);
+            LogInternal(LogType.Exception, exception.Message + "\n" + exception.StackTrace);
+        }
+
+        [Conditional("DEBUG")]
+        public static void Assert(bool condition, string message)
+        {
+            if (!condition)
+                LogError("Assertion failure: " + message);
+        }
+
+        [Conditional("DEBUG")]
+        public static void Assert(bool condition)
+        {
+            if (!condition)
+                LogError("Assertion failure");
         }
     }
 
@@ -114,11 +129,8 @@ namespace UnityEngine
     }
 
     [AttributeUsage(AttributeTargets.Class)]
-    public class ExecuteAlwaysAttribute : Attribute
+    public class ExecuteAlways : Attribute
     {
-        public ExecuteAlwaysAttribute()
-        {
-        }
     }
 
     public static class Time
@@ -134,6 +146,8 @@ namespace UnityEngine
         public static float time => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0f;
 
         public static double timeAsDouble => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0;
+
+        public static double realtimeSinceStartup => Time_GetTicksMicrosecondsMonotonic() / 1_000_000.0;
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -147,4 +161,42 @@ namespace UnityEngine
     public sealed class SerializeField : Attribute
     {
     }
+
+    public class RuntimeInitializeOnLoadMethodAttribute : Attribute
+    {
+    }
 }
+
+#if !NET_DOTS
+namespace UnityEngine.Serialization
+{
+    /// <summary>
+    ///   <para>Use this attribute to rename a field without losing its serialized value.</para>
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field, AllowMultiple = true, Inherited = false)]
+    public class FormerlySerializedAsAttribute : Attribute
+    {
+        private string m_oldName;
+
+        /// <summary>
+        ///   <para></para>
+        /// </summary>
+        /// <param name="oldName">The name of the field before renaming.</param>
+        public FormerlySerializedAsAttribute(string oldName)
+        {
+            this.m_oldName = oldName;
+        }
+
+        /// <summary>
+        ///   <para>The name of the field before the rename.</para>
+        /// </summary>
+        public string oldName
+        {
+            get
+            {
+                return this.m_oldName;
+            }
+        }
+    }
+}
+#endif

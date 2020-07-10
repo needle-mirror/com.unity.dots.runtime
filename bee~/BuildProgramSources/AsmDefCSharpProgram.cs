@@ -6,16 +6,13 @@ using Unity.BuildSystem.CSharpSupport;
 
 public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 {
-    public DotsRuntimeCSharpProgram[] ReferencedPrograms { get; }
     public AsmDefDescription AsmDefDescription { get; }
 
-    // We don't have the ability to have asmdef references which are required by Hybrid but are incompatible
-    // with DOTS Runtime. So we manually remove them here for now :(
-    string[] IncompatibleDotRuntimeAsmDefs =
+    // Not all packages explicitly opt-out of Tiny BCL by putting a defineConstraint: ["!NET_DOTS"] in their asmdef
+    // so we explicitly filter them here until a proper fix has landed
+    string[] IncompatibleTinyBCLAsmDefs =
     {
-        "Unity.Properties",
-        "Unity.Properties.Reflection",
-        "Unity.PerformanceTesting"
+        "Unity.PerformanceTesting.dll"
     };
 
     public AsmDefCSharpProgram(AsmDefDescription asmDefDescription)
@@ -26,9 +23,6 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
         AsmDefDescription = asmDefDescription;
 
         var asmDefReferences = AsmDefDescription.References.Select(asmDefDescription1 => BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(asmDefDescription1)).ToList();
-
-        ReferencedPrograms = asmDefReferences.Where(r => !IncompatibleDotRuntimeAsmDefs.Contains(r.AsmDefDescription.Name)).ToArray();
-
         var isExe = asmDefDescription.DefineConstraints.Contains("UNITY_DOTS_ENTRYPOINT") ||
                     asmDefDescription.Name.EndsWith(".Tests");
 
@@ -42,10 +36,15 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
         References.Add(config =>
         {
             if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
-                return ReferencedPrograms.Where(rp => rp.IsSupportedFor(dotsConfig));
+            {
+                if(dotsConfig.TargetFramework == TargetFramework.Tiny)
+                    return asmDefReferences.Where(rp => rp.IsSupportedFor(dotsConfig) && !IncompatibleTinyBCLAsmDefs.Contains(rp.FileName));
+                else
+                    return asmDefReferences.Where(rp => rp.IsSupportedFor(dotsConfig));
+            }
 
             //this codepath will be hit for the bindgem invocation
-            return ReferencedPrograms;
+            return asmDefReferences;
         });
 
         if (AsmDefDescription.IsTinyRoot || isExe)
@@ -59,26 +58,23 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
             References.Add(BuildProgram.ZeroJobs);
         if (BuildProgram.UnityLowLevel != null)
             References.Add(BuildProgram.UnityLowLevel);
+        if (BuildProgram.TinyIO != null)
+            References.Add(BuildProgram.TinyIO);
 
         if (IsTestAssembly)
         {
-            // Set true to build the Portable runner on dotnet (instead of the NUnit runner).
-            // Normally the portable runner is only used for IL2CPP, but debugging the tests
-            // and runner is easier on dotnet.
-            bool usePortableRunnerOnDotNet = false;
-
             var nunitLiteMain = BuildProgram.BeeRoot.Combine("CSharpSupport/NUnitLiteMain.cs");
             Sources.Add(nunitLiteMain);
 
             // Setup for IL2CPP
             var tinyTestFramework = BuildProgram.BeeRoot.Parent.Combine("TinyTestFramework");
-            Sources.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || usePortableRunnerOnDotNet , tinyTestFramework);
-            Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || usePortableRunnerOnDotNet , "UNITY_PORTABLE_TEST_RUNNER");
+            Sources.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework == TargetFramework.Tiny, tinyTestFramework);
+            Defines.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.TinyIl2cpp || ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework == TargetFramework.Tiny, "UNITY_PORTABLE_TEST_RUNNER");
 
             // Setup for dotnet
-            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && !usePortableRunnerOnDotNet , BuildProgram.NUnitFramework);
-            ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");
-            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && !usePortableRunnerOnDotNet , BuildProgram.NUnitLite);
+            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework != TargetFramework.Tiny, BuildProgram.NUnitFramework);
+            ProjectFile.AddCustomLinkRoot(nunitLiteMain.Parent, "TestRunner");                                            
+            References.Add(c => ((DotsRuntimeCSharpProgramConfiguration)c).ScriptingBackend == ScriptingBackend.Dotnet && ((DotsRuntimeCSharpProgramConfiguration)c).TargetFramework != TargetFramework.Tiny, BuildProgram.NUnitLite);
 
             // General setup
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities")));
@@ -96,18 +92,17 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
     public override bool IsSupportedFor(CSharpProgramConfiguration config)
     {
         //UNITY_DOTS_ENTRYPOINT is actually a fake define constraint we use to signal the buildsystem,
-        //so don't impose it as a constraint
-        return base.IsSupportedFor(config) &&
-               AsmDefDescription.DefineConstraints.All(dc =>
-                   dc == "UNITY_DOTS_ENTRYPOINT" || Defines.For(config).Contains(dc));
+        // so don't impose it as a constraint
+        var validPositiveConstraintsOrEntryPoint = AsmDefDescription.PositiveDefineConstraints.All(dc => Defines.For(config).Contains(dc) || dc == "UNITY_DOTS_ENTRYPOINT");
+        var validNegativeConstraints = !AsmDefDescription.NegativeDefineConstraints.Any(dc => Defines.For(config).Contains(dc));
+
+        return base.IsSupportedFor(config) && validPositiveConstraintsOrEntryPoint && validNegativeConstraints;
     }
 
     protected override TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
     {
-        if (IsILPostProcessorAssembly || (IsTestAssembly && ((DotsRuntimeCSharpProgramConfiguration)config).ScriptingBackend == ScriptingBackend.Dotnet))
-        {
+        if (IsILPostProcessorAssembly)
             return TargetFramework.NetStandard20;
-        }
 
         return base.GetTargetFramework(config, program);
     }

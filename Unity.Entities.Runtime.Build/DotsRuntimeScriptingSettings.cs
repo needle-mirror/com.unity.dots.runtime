@@ -8,7 +8,7 @@ namespace Unity.Entities.Runtime.Build
 {
     internal sealed class DotsRuntimeScriptingSettings : IDotsRuntimeBuildModifier
     {
-        [CreateProperty, HideInInspector]
+        [CreateProperty]
         public bool EnableMultithreading { get; set; } = false;
 
         [CreateProperty]

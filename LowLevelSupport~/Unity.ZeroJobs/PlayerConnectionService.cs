@@ -8,6 +8,9 @@ using Unity.Jobs;
 using static Unity.Baselib.LowLevel.Binding;
 using UnityEngine.Events;
 using static System.Text.Encoding;
+#if ENABLE_PROFILER
+using Unity.Development.Profiling;
+#endif
 
 namespace Unity.Development.PlayerConnection
 {
@@ -194,183 +197,6 @@ namespace Unity.Development.PlayerConnection
         //public static readonly UnityGuid kProfilerSetMarkerFiltering = new UnityGuid("18207525e148469ea059ec2cdfb026a5");
     }
 
-    // Multicast is used to announce our existence to the local network - especially to Unity Editor. It can also be useful, for instance, for
-    // debuggers to know about us.
-    //
-    // Multicast should always be enabled if player connection is enabled in non-web builds. Multicast's main purpose is to support
-    // the editor initiating a connection to us automatically in development builds.
-    //
-    // However, in web builds, since there is
-    // a) no UDP in WebSockets and 
-    // b) no listening for WebSockets connections therefore no auto-connection from the Editor
-    // we disable multicasting.
-    //
-    // SIDE NOTE:
-    // IL2CPP managed debugging uses multicasting even on web through it is not supported by normal WebSockets. Support for this
-    // is provided through a posix-sockets emulation layer by a WebSockets based proxy-server included with Emscripten. As mentioned in a later
-    // comment, this manner of translation is too slow to be used for profiler, livelink, etc, and so we do not take "advantage"
-    // of it for the general case here.
-
-#if ENABLE_MULTICAST
-    // This is used inside Connection directly
-    internal class Multicast
-    {
-        private static Baselib_Socket_Handle hSocket = Baselib_Socket_Handle_Invalid;
-        private static Baselib_NetworkAddress hAddress;
-        private static Baselib_ErrorState errState;
-        private static string broadcastIp = "225.0.0.222";
-        private static ushort broadcastPort = (ushort)EditorPorts.Multicast;
-        private static int broadcastCountdown = 0;
-        private static bool initialized = false;
-        private static string localIp = "127.0.0.1";
-        private static string whoAmI;
-
-        private const uint kPlayerConnectionVersion = 0x00100100;  // must match with editor build
-        private const uint kPlayerGuidDirectConnect = 1337;  // special player id that we must provide if we aren't listening for unity editor connection request
-        private const int kBroadcastCounter = 30;
-
-        [Flags]
-        private enum Flags : ushort
-        {
-            kRequestImmediateConnect = 1 << 0,  // must be enabled for auto connect to have effect
-            kSupportsProfile = 1 << 1,
-            //kCustomMessage = 1 << 2,  // unused
-            //kUseAlternateIP = 1 << 3,  // unused
-            kAutoConnect = 1 << 4
-        };
-
-        private static void CreateWhoAmI(bool directConnect, ushort listenPort)
-        {
-            Flags flags = 0;
-            if (!directConnect)
-                flags |= Flags.kAutoConnect | Flags.kRequestImmediateConnect;
-#if ENABLE_PROFILER
-            flags |= Flags.kSupportsProfile;
-#endif
-            uint playerGuid32 = (uint)Baselib_Timer_GetHighPrecisionTimerTicks();
-            if (playerGuid32 == 0)  // id 0 is special the editor
-                playerGuid32--;
-            if (directConnect)
-                playerGuid32 = kPlayerGuidDirectConnect;
-
-#if UNITY_WINDOWS
-            string platform = "DotsRuntimeWindowsPlayer";
-#elif UNITY_LINUX
-            string platform = "DotsRuntimeLinuxPlayer";
-#elif UNITY_MACOSX
-            string platform = "DotsRuntimeOsxPlayer";
-#elif UNITY_IOS
-            string platform = "DotsRuntimeIosPlayer";
-#elif UNITY_ANDROID
-            string platform = "DotsRuntimeAndroidPlayer";
-#elif UNITY_WEBGL
-            string platform = "DotsRuntimeWebglPlayer";
-#else
-            string platform = "DotsRuntimePlayer";
-#endif
-
-#if UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER // This is irrelevant for non-il2cpp builds
-            int debugEnabled = 1;
-#else
-            int debugEnabled = 0;
-#endif
-
-            whoAmI = $"[IP] {localIp}";
-            whoAmI += $" [Port] {listenPort}";
-            whoAmI += $" [Flags] {(ushort)flags}";
-            whoAmI += $" [Guid] {playerGuid32}";
-            whoAmI += $" [EditorId] {0}";  // @@todo need the editor id for autoconnect
-            whoAmI += $" [Version] {kPlayerConnectionVersion}";
-#if UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER // This is irrelevant for non-il2cpp builds
-            whoAmI += $" [Id] {platform}({localIp}):56000";
-#else
-            whoAmI += $" [Id] {platform}";
-#endif
-            whoAmI += $" [Debug] {debugEnabled}";
-            whoAmI += $" [PackageName] {platform}";
-            whoAmI += $" [ProjectName] {"DOTS_Runtime_Game"}";  // @@todo need a game name
-        }
-
-        public static void Initialize(bool directConnect, ushort listenPort)
-        {
-            if (initialized)
-                return;
-
-            unsafe
-            {
-                hSocket = Baselib_Socket_Create(Baselib_NetworkAddress_Family.IPv4, Baselib_Socket_Protocol.UDP, (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
-                if (errState.code == Baselib_ErrorCode.Success)
-                {
-                    fixed (byte* bip = System.Text.Encoding.UTF8.GetBytes(broadcastIp))
-                    {
-                        Baselib_NetworkAddress_Encode((Baselib_NetworkAddress*)UnsafeUtility.AddressOf(ref hAddress), Baselib_NetworkAddress_Family.IPv4,
-                            bip, broadcastPort, (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
-                    }
-                }
-            }
-
-            if (errState.code != Baselib_ErrorCode.Success)
-            {
-                if (hSocket.handle != Baselib_Socket_Handle_Invalid.handle)
-                {
-                    Baselib_Socket_Close(hSocket);
-                    hSocket = Baselib_Socket_Handle_Invalid;
-                }
-                return;
-            }
-
-            CreateWhoAmI(directConnect, listenPort);
-
-            initialized = true;
-        }
-
-        public static void Shutdown()
-        {
-            if (!initialized)
-                return;
-
-            if (hSocket.handle != Baselib_Socket_Handle_Invalid.handle)
-            {
-                Baselib_Socket_Close(hSocket);
-                hSocket = Baselib_Socket_Handle_Invalid;
-            }
-
-            initialized = true;
-            errState.code = Baselib_ErrorCode.Success;
-        }
-
-        public static void Broadcast(bool directConnect, ushort listenPort)
-        {
-            Initialize(directConnect, listenPort);
-
-            if (!initialized)
-                return;
-
-            if (broadcastCountdown > 0)
-            {
-                broadcastCountdown--;
-                return;
-            }
-
-            Baselib_Socket_Message message = new Baselib_Socket_Message();
-            unsafe
-            {
-                var bytes = UTF8.GetBytes(whoAmI);
-                fixed (byte* bip = bytes)
-                {
-                    message.data = (IntPtr)bip;
-                }
-                message.dataLen = (uint)bytes.Length;
-                message.address = (Baselib_NetworkAddress*)UnsafeUtility.AddressOf(ref hAddress);
-
-                Baselib_Socket_UDP_Send(hSocket, &message, 1, (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
-            }
-
-            broadcastCountdown = kBroadcastCounter;
-        }
-    }
-#endif
-
     public class Connection
     {
         private enum ConnectionState
@@ -429,11 +255,7 @@ namespace Unity.Development.PlayerConnection
         // cause it to auto-connect to us. (This is work in progress and requires an API in the editor to be exposed first
         // in order to produce the correct multicast message in the player)
 
-#if UNITY_WINDOWS || UNITY_LINUX || UNITY_MACOSX
-        private static ConnectionState initType = ConnectionState.ConnectDirect;
-        private static string initIp = "127.0.0.1";  // default connect to local host
-        private static ushort initPort = (ushort)EditorPorts.DirectConnect;
-#elif UNITY_WEBGL
+#if UNITY_WEBGL
 #if ENABLE_MULTICAST
         // Only needed in multicasting scenario if on WEBGL platform
         private static ConnectionState initType = ConnectionState.ConnectDirect;
@@ -447,7 +269,7 @@ namespace Unity.Development.PlayerConnection
 #endif
         private static int initRetryCounter = 0;
 
-        private static MessageStream bufferReceive = new MessageStream(kReserveCapacityReceive);
+        private static MessageStream receiveStream = new MessageStream(kReserveCapacityReceive);
 
         public const int kReserveCapacityReceive = 8192;
         public const int kInitRetryCounter = 30;
@@ -455,7 +277,7 @@ namespace Unity.Development.PlayerConnection
         public static bool ConnectionInitialized => state == ConnectionState.Ready || state == ConnectionState.Invalid;
         public static bool Connected => state == ConnectionState.Ready;
         public static bool Listening => state == ConnectionState.ConnectListenAccept;
-        public static bool HasSendDataQueued => !MessageStreamManager.bufferQueue.Data.sendQueue.Empty();
+        public static bool HasSendDataQueued => MessageStreamManager.HasDataToSend;
 
 #if UNITY_WINDOWS
         // WSAStartup and WSACleanup is needed for windows support currently. This will be removed
@@ -523,7 +345,7 @@ namespace Unity.Development.PlayerConnection
 
         [DllImport(DLL, EntryPoint = "js_html_playerconnectionLostConnection")]
         private static extern int WebSocketLostConnection();
-        
+
         [DllImport(DLL, EntryPoint = "js_html_playerconnectionIsConnecting")]
         private static extern int WebSocketIsConnecting();
 
@@ -543,16 +365,29 @@ namespace Unity.Development.PlayerConnection
                 return;
 
             PlatformInit();
-            bufferReceive = new MessageStream(kReserveCapacityReceive);
+            receiveStream = new MessageStream(kReserveCapacityReceive);
 
-            MessageStreamManager.Initialize();  // must be before initializing senders
-
-            UnityEngine.Networking.PlayerConnection.PlayerConnection.instance.Initialize();
-#if ENABLE_MULTICAST
-            Multicast.Initialize(initType == ConnectionState.ConnectDirect, initPort);
-#endif
+            InitializeMessageStreamManager();
 
             serviceInitialized = true;
+        }
+
+        // This happens in the default Initialize() method.
+        // However, separate to support tests without having to
+        //   a) initialize all of player connection if it's not used otherwise
+        //   b) make the MessageStream api public when it otherwise doesn't need to be
+        public static void InitializeMessageStreamManager()
+        {
+            MessageStreamManager.Initialize();
+        }
+
+        // This is separate from the default initialization because it depends on configuration data which is not loaded until after
+        // core systems have been initialized. Configuration data lives in the ECS world.
+        public static void InitializeMulticast(uint editorGuid32, string gameName)
+        {
+#if ENABLE_MULTICAST
+            Multicast.Initialize(initType == ConnectionState.ConnectDirect, initPort, editorGuid32, gameName);
+#endif
         }
 
         public static void Shutdown()
@@ -565,21 +400,24 @@ namespace Unity.Development.PlayerConnection
 #endif
             Disconnect();
 
-            UnityEngine.Networking.PlayerConnection.PlayerConnection.instance.Shutdown();
+            ShutdownMessageStreamManager();
 
-            MessageStreamManager.Shutdown();
-
-            bufferReceive.Free();
+            receiveStream.Free();
             PlatformShutdown();
 
             serviceInitialized = false;
+        }
+
+        public static void ShutdownMessageStreamManager()
+        {
+            MessageStreamManager.Shutdown();
         }
 
         public static void ConnectDirect(string forceIp, ushort forcePort)
         {
             initIp = forceIp;
             initPort = forcePort;
-#if !UNITY_WEBGL
+#if !UNITY_WEBGL || ENABLE_MULTICAST
             initType = ConnectionState.ConnectDirect;
 #endif
             initRetryCounter = 0;
@@ -613,7 +451,7 @@ namespace Unity.Development.PlayerConnection
 
                 unsafe
                 {
-                    fixed (byte* bip = System.Text.Encoding.UTF8.GetBytes(initIp + $":{initPort}"))
+                    fixed (byte* bip = UTF8.GetBytes(initIp + $":{initPort}"))
                     {
                         WebSocketConnect(bip);
                     }
@@ -635,9 +473,9 @@ namespace Unity.Development.PlayerConnection
                     hSocket = Baselib_Socket_Create(Baselib_NetworkAddress_Family.IPv4, Baselib_Socket_Protocol.TCP, (Baselib_ErrorState *)UnsafeUtility.AddressOf(ref errState));
                     if (errState.code == Baselib_ErrorCode.Success)
                     {
-                        fixed (byte* bip = System.Text.Encoding.UTF8.GetBytes(initIp))
+                        fixed (byte* bip = UTF8.GetBytes(initIp))
                         {
-                            Baselib_NetworkAddress_Encode((Baselib_NetworkAddress*)UnsafeUtility.AddressOf(ref hAddress), Baselib_NetworkAddress_Family.IPv4, 
+                            Baselib_NetworkAddress_Encode((Baselib_NetworkAddress*)UnsafeUtility.AddressOf(ref hAddress), Baselib_NetworkAddress_Family.IPv4,
                                 bip, initPort, (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
                         }
                     }
@@ -750,14 +588,14 @@ namespace Unity.Development.PlayerConnection
             state = ConnectionState.Init;
 
             MessageStreamManager.RecycleAll();
-            bufferReceive.RecycleAndFreeExtra();
+            receiveStream.RecycleStreamAndFreeExtra();
         }
 
         [MonoPInvokeCallback]
         public static void TransmitAndReceive()
         {
 #if ENABLE_MULTICAST
-            Multicast.Broadcast(initType == ConnectionState.ConnectDirect, initPort);
+            Multicast.Broadcast();
 #endif
             Connect();
 
@@ -789,7 +627,7 @@ namespace Unity.Development.PlayerConnection
                 return;
             }
 
-            // Disconnection didn't occur, but we could still be waiting on a connection 
+            // Disconnection didn't occur, but we could still be waiting on a connection
 #if UNITY_WEBGL
             if (WebSocketIsConnecting() == 1)
 #else
@@ -799,6 +637,14 @@ namespace Unity.Development.PlayerConnection
                 return;
             }
 
+#if ENABLE_PROFILER
+            unsafe
+            {
+                // It's ugly here, but this needs to be before other profiler data that is sent - so we do it manually
+                // and only if we know we're going to TrySubmitAll() after other checks above
+                ProfilerProtocolSession.streamSession.buffer->TrySubmitStream(true);
+            }
+#endif
             MessageStreamManager.TrySubmitAll();
             Receive();
 
@@ -812,17 +658,17 @@ namespace Unity.Development.PlayerConnection
         {
             // Receive anything sent to us
             // Similar setup for sending data
-            MessageHeader* header = (MessageHeader*)bufferReceive.BufferRead->Buffer;
+            MessageHeader* header = (MessageHeader*)receiveStream.BufferRead->Buffer;
 
             int bytesNeeded = 0;
-            if (bufferReceive.TotalBytes < sizeof(MessageHeader))
-                bytesNeeded = sizeof(MessageHeader) - bufferReceive.TotalBytes;
+            if (receiveStream.TotalBytes < sizeof(MessageHeader))
+                bytesNeeded = sizeof(MessageHeader) - receiveStream.TotalBytes;
             else
-                bytesNeeded = sizeof(MessageHeader) + header->bytes - bufferReceive.TotalBytes;
+                bytesNeeded = sizeof(MessageHeader) + header->bytes - receiveStream.TotalBytes;
 
             while (bytesNeeded > 0)
             {
-                MessageStream.MessageStreamBuffer* bufferWrite = bufferReceive.BufferWrite;
+                MessageStream.MessageStreamBuffer* bufferWrite = receiveStream.BufferWrite;
 
                 int bytesAvail = bufferWrite->Capacity - bufferWrite->Size;
 #if UNITY_WEBGL
@@ -848,12 +694,12 @@ namespace Unity.Development.PlayerConnection
                     return;
                 }
 
-                bufferReceive.UpdateSize((int)actualWritten);
+                receiveStream.UpdateSize((int)actualWritten);
                 bytesNeeded -= (int)actualWritten;
                 if (bytesNeeded == 0)
                 {
                     // Finished receiving header
-                    if (bufferReceive.TotalBytes == sizeof(MessageHeader))
+                    if (receiveStream.TotalBytes == sizeof(MessageHeader))
                     {
                         // De-synced somewhere... reset connection
                         if (header->magicId != EditorMessageIds.kMagicNumber)
@@ -863,7 +709,7 @@ namespace Unity.Development.PlayerConnection
                             return;
                         }
                         bytesNeeded = header->bytes;
-                        bufferReceive.Allocate(bytesNeeded);
+                        receiveStream.Allocate(bytesNeeded);
                     }
 
                     // Finished receiving message
@@ -876,7 +722,7 @@ namespace Unity.Development.PlayerConnection
                             if (e.messageId == header->messageId)
                             {
                                 // This could be anything from a 4-byte "bool" to an asset sent from the editor
-                                byte[] messageData = bufferReceive.ToByteArray(sizeof(MessageHeader), bufferReceive.TotalBytes);
+                                byte[] messageData = receiveStream.ToByteArray(sizeof(MessageHeader), receiveStream.TotalBytes);
                                 e.Invoke(0, messageData);
                             }
                         }
@@ -894,7 +740,7 @@ namespace Unity.Development.PlayerConnection
                         }
 
                         // Poll for next message
-                        bufferReceive.RecycleAndFreeExtra();
+                        receiveStream.RecycleStreamAndFreeExtra();
                         bytesNeeded = sizeof(MessageHeader);
                     }
                 }
@@ -909,35 +755,43 @@ namespace Unity.Development.PlayerConnection
             // Transmit anything in buffers
             while (HasSendDataQueued)
             {
-                MessageStream* bufferSend = MessageStreamManager.bufferQueue.Data.sendQueue.Pop();
-                MessageStream.MessageStreamBuffer* bufferRead = bufferSend->BufferRead;
+                MessageStream* sendStream = MessageStreamManager.PlayerConnectionMt_DequeSendStream();
+                if (sendStream == null)  // rare return value in multithreading situations when the queue is not empty
+                    continue;
+                MessageStream.MessageStreamBuffer* bufferRead = sendStream->BufferRead;
+
                 int offset = 0;
 
                 while (bufferRead != null)
                 {
+                    if (bufferRead->Size > 0)
+                    {
 #if UNITY_WEBGL
-                    uint actualRead = WebSocketSend(bufferRead->Buffer + offset, bufferRead->Size - offset);
-                    if (actualRead == 0xffffffff)
+                        uint actualRead = WebSocketSend(bufferRead->Buffer + offset, bufferRead->Size - offset);
+                        if (actualRead == 0xffffffff)
 #else
-                    uint actualRead = Baselib_Socket_TCP_Send(hSocket, bufferRead->Buffer + offset, (uint)(bufferRead->Size - offset), (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
-                    if (errState.code != Baselib_ErrorCode.Success)
+                        uint actualRead = Baselib_Socket_TCP_Send(hSocket, bufferRead->Buffer + offset, (uint)(bufferRead->Size - offset), (Baselib_ErrorState*)UnsafeUtility.AddressOf(ref errState));
+                        if (errState.code != Baselib_ErrorCode.Success)
 #endif
-                    {
-                        // Something bad happened; lost connection maybe?
-                        // After cleaning up, next time we will try to re-initialize
-                        Disconnect();
-                        initRetryCounter = kInitRetryCounter;
-                        return;
+                        {
+                            // Something bad happened; lost connection maybe?
+                            // After cleaning up, next time we will try to re-initialize
+                            Disconnect();
+                            initRetryCounter = kInitRetryCounter;
+                            return;
+                        }
+
+                        if (actualRead == 0)
+                        {
+                            // Move the data to be sent to the front of this buffer for next time
+                            sendStream->RecyclePartialStream(bufferRead, offset);
+                            MessageStreamManager.PlayerConnectionMt_QueueSendStream((IntPtr)sendStream);
+                            return;
+                        }
+
+                        offset += (int)actualRead;
                     }
 
-                    if (actualRead == 0)
-                    {
-                        // Move the data to be sent to the front of this buffer for next time
-                        bufferSend->RecycleRange(bufferRead, offset);
-                        return;
-                    }
-
-                    offset += (int)actualRead;
                     if (offset == bufferRead->Size)
                     {
                         bufferRead = bufferRead->Next;
@@ -945,7 +799,7 @@ namespace Unity.Development.PlayerConnection
                     }
                 }
 
-                MessageStreamManager.RecycleBuffer(bufferSend);
+                MessageStreamManager.RecycleStream(sendStream);
             }
         }
 

@@ -50,59 +50,69 @@ namespace Unity.Baselib.LowLevel
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void Baselib_Memory_GetPageSizeInfo(Baselib_Memory_PageSizeInfo* outPagesSizeInfo);
         /// <summary>Allocates memory using a system allocator like malloc.</summary>
-        /// <remarks>
-        /// We guarantee that the returned address is at least aligned by Baselib_Memory_MinGuaranteedAlignment bytes.
-        /// Return value is guaranteed to be a unique pointer. This is true for zero sized allocations as well.
-        /// Allocation failures trigger process abort.
-        /// </remarks>
+        /// <remarks>Allocation failures or invalid alignments will trigger process abort.</remarks>
+        /// <param name="size">Size of the allocation. Zero is valid.</param>
+        /// <returns>
+        /// Unique pointer to allocation. At least aligned to by Baselib_Memory_MinGuaranteedAlignment bytes.
+        /// This is true for zero sized allocations as well.
+        /// </returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr Baselib_Memory_Allocate(size_t size);
         /// <summary>Reallocates memory previously allocated by Baselib_Memory_Allocate or Baselib_Memory_Reallocate.</summary>
-        /// <remarks>
-        /// Reallocating an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_Allocate or Baselib_Memory_Reallocate leads to undefined behavior.
-        ///
+        /// <remarks>Allocation failures or invalid alignments will trigger process abort.</remarks>
+        /// <param name="ptr">
+        /// Pointer previously returned by Baselib_Memory_Allocate or Baselib_Memory_Reallocate.
+        /// Reallocating an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_Allocate or
+        /// Baselib_Memory_Reallocate leads to undefined behavior.
         /// Passing `nullptr` yield the same result as calling Baselib_Memory_Allocate.
-        ///
-        /// Return value is guaranteed to be a unique pointer. This is true for zero sized allocations as well.
-        /// Allocation failures trigger process abort.
-        /// </remarks>
+        /// </param>
+        /// <param name="size">Size of the allocation. No special restrictions apply, zero is valid.</param>
+        /// <returns>
+        /// Unique pointer to allocation. At least aligned to by Baselib_Memory_MinGuaranteedAlignment bytes.
+        /// This is true for zero sized allocations as well.
+        /// </returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr Baselib_Memory_Reallocate(IntPtr ptr, size_t newSize);
         /// <summary>Frees memory allocated by Baselib_Memory_Allocate Baselib_Memory_Reallocate.</summary>
-        /// <remarks>
-        /// Passing `nullptr` result in a no-op.
+        /// <param name="ptr">
+        /// Pointer previously returned by Baselib_Memory_Allocate or Baselib_Memory_Reallocate.
         /// Freeing an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_Allocate or Baselib_Memory_Reallocate leads to undefined behavior.
-        /// </remarks>
+        /// Passing `nullptr` result in a no-op.
+        /// </param>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void Baselib_Memory_Free(IntPtr ptr);
         /// <summary>Allocates memory using a system allocator like malloc and guarantees that the returned pointer is aligned to the specified alignment.</summary>
-        /// <remarks>
-        /// Alignment parameter needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
+        /// <remarks>Allocation failures or invalid alignments will trigger process abort.</remarks>
+        /// <param name="size">Size of the allocation. No special restrictions (like  multiples of alignment) apply, zero is valid.</param>
+        /// <param name="alignment">
+        /// Needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
         /// Any alignment smaller than Baselib_Memory_MinGuaranteedAlignment, will be clamped to Baselib_Memory_MinGuaranteedAlignment.
-        ///
-        /// Return value is guaranteed to be a unique pointer. This is true for zero sized allocations as well.
-        /// Allocation failures or invalid alignments will trigger process abort.
-        /// </remarks>
+        /// </param>
+        /// <returns>Unique pointer to aligned allocation. This is true for zero sized allocations as well.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr Baselib_Memory_AlignedAllocate(size_t size, size_t alignment);
         /// <summary>Reallocates memory previously allocated by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate.</summary>
-        /// <remarks>
-        /// Alignment needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
-        /// Reallocating an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate leads to undefined behavior.
-        ///
+        /// <remarks>Allocation failures or invalid alignments will trigger process abort.</remarks>
+        /// <param name="ptr">
+        /// Pointer previously returned by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate.
+        /// Reallocating an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_AlignedAllocate or
+        /// Baselib_Memory_AlignedReallocate leads to undefined behavior.
         /// Passing `nullptr` yield the same result as calling Baselib_Memory_AlignedAllocate.
-        ///
-        /// Return value is guaranteed to be a unique pointer. This is true for zero sized allocations as well.
-        /// Allocation failures or invalid alignments will trigger process abort.
-        /// </remarks>
+        /// </param>
+        /// <param name="size">Size of the allocation. No special restrictions apply, zero is valid.</param>
+        /// <param name="alignment">
+        /// Needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
+        /// Any alignment smaller than Baselib_Memory_MinGuaranteedAlignment, will be clamped to Baselib_Memory_MinGuaranteedAlignment.
+        /// </param>
+        /// <returns>Unique pointer to aligned allocation. This is true for zero sized allocations as well.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr Baselib_Memory_AlignedReallocate(IntPtr ptr, size_t newSize, size_t alignment);
         /// <summary>Frees memory allocated by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate.</summary>
-        /// <remarks>
+        /// <param name="ptr">
+        /// Pointer previously returned by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate.
         /// Freeing an already freed pointer or a pointer that was not previously allocated by Baselib_Memory_AlignedAllocate or Baselib_Memory_AlignedReallocate leads to undefined behavior.
-        ///
         /// Passing `nullptr` result in a no-op.
-        /// </remarks>
+        /// </param>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void Baselib_Memory_AlignedFree(IntPtr ptr);
         /// <summary>Page state options</summary>

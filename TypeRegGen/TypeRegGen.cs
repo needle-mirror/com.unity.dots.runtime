@@ -154,10 +154,11 @@ namespace Unity.ZeroPlayer
             // This call can be removed once IL2CPP supports module initializers
             InjectRegisterAllAssemblyRegistries();
 
-            m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_BurstEnabled);
+            m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_BurstEnabled, m_MultithreadEnabled);
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
             m_interfaceGen.InjectBurstInfrastructureMethods();
+            m_interfaceGen.PatchJobDebuggerStringTable();
 
             ScanAndInjectCustomBootstrap();
 
@@ -209,16 +210,12 @@ namespace Unity.ZeroPlayer
 
         public void ScanAndInjectCustomBootstrap()
         {
-            const string TinyCoreAssemblyName = "Unity.Tiny.Core";
             const string CustomBootstrapName = "Unity.Entities.ICustomBootstrap";
-            var tinyCoreAsmDef = m_AssemblyDefs.FirstOrDefault(a => a.Name.Name == TinyCoreAssemblyName);
-            if (tinyCoreAsmDef == null)
-                throw new ArgumentException($"Failed to find {TinyCoreAssemblyName} assembly for modifying.");
 
             var customBootstraps = new List<TypeDefinition>();
             foreach (AssemblyDefinition asm in m_AssemblyDefs)
             {
-                if (!asm.MainModule.AssemblyReferences.Any(anr => anr.Name == TinyCoreAssemblyName))
+                if (asm == m_EntityAssembly)
                     continue;
 
                 foreach (TypeDefinition t in asm.MainModule.GetAllTypes())
@@ -230,8 +227,8 @@ namespace Unity.ZeroPlayer
                 }
             }
 
-            var defaultWorldInitDef = tinyCoreAsmDef.MainModule.GetType("Unity.Entities.DefaultWorldInitialization");
-            var getBootstrapFn = defaultWorldInitDef.Methods.First(m => m.Name == "GetCustomBootstrap");
+            var defaultWorldInitDef = m_EntityAssembly.MainModule.GetType("Unity.Entities.DefaultWorldInitialization");
+            var getBootstrapFn = defaultWorldInitDef.Methods.First(m => m.Name == "CreateBootStrap");
             getBootstrapFn.Body.Instructions.Clear();
             var il = getBootstrapFn.Body.GetILProcessor();
 
@@ -269,7 +266,7 @@ namespace Unity.ZeroPlayer
                 }
 
                 ForceTypeAsPublic(bootstrap);
-                var bootstrapCtor = tinyCoreAsmDef.MainModule.ImportReference(bootstrap.GetConstructors().First(c => !c.HasParameters));
+                var bootstrapCtor = m_EntityAssembly.MainModule.ImportReference(bootstrap.GetConstructors().First(c => !c.HasParameters));
                 il.Emit(OpCodes.Newobj, bootstrapCtor);
             }
             il.Emit(OpCodes.Ret);
@@ -292,12 +289,16 @@ namespace Unity.ZeroPlayer
             var profileStr = args[argIndex++];
             var burstStr = args[argIndex++];
             var configStr = args[argIndex++].ToLower();
+            var multithreadStr = args[argIndex++];
 
             if (!int.TryParse(archBitsStr, out m_ArchBits) || (m_ArchBits != 32 && m_ArchBits != 64))
                 throw new ArgumentException($"Invalid architecture-bits passed in as second argument. Received '{archBitsStr}', Expected '32' or '64'.");
 
             if (burstStr == "Bursted")
                 m_BurstEnabled = true;
+
+            if (multithreadStr == "Multithreaded")
+                m_MultithreadEnabled = true;
 
             for (int i = argIndex; i < args.Length; ++i)
             {
@@ -673,6 +674,7 @@ namespace Unity.ZeroPlayer
 
         int m_ArchBits;
         bool m_BurstEnabled;
+        bool m_MultithreadEnabled;
         string m_OutputDir;
         InterfaceGen m_interfaceGen;
 

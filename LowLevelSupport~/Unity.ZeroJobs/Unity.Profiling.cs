@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 using Unity.Profiling.LowLevel;
 using Unity.Profiling.LowLevel.Unsafe;
 using Unity.Collections.LowLevel.Unsafe;
 using static System.Text.Encoding;
 #if ENABLE_PROFILER
-using Unity.Development;
+using Unity.Development.Profiling;
 #endif
 
 namespace Unity.Profiling
@@ -60,7 +60,7 @@ namespace Unity.Profiling
         internal void GetName(ref string name)
         {
 #if ENABLE_PROFILER
-            name = Development.Profiler.MarkerGetStringName(m_Ptr);
+            name = Development.Profiling.Profiler.MarkerGetStringName(m_Ptr);
 #endif
         }
 
@@ -205,7 +205,7 @@ namespace Unity.Profiling.LowLevel.Unsafe
                 {
                     UTF8.GetBytes(t, name.Length, bytes, textBytes);
                 }
-                return (IntPtr)Development.Profiler.MarkerGetOrCreate(categoryId, bytes, textBytes, (ushort)(flags | MarkerFlags.Script));
+                return (IntPtr)Development.Profiling.Profiler.MarkerGetOrCreate(categoryId, bytes, textBytes, (ushort)(flags | MarkerFlags.Script));
             }
 #else
             return IntPtr.Zero;
@@ -220,7 +220,7 @@ namespace Unity.Profiling.LowLevel.Unsafe
 #if ENABLE_PROFILER
             unsafe
             {
-                Development.Profiler.MarkerBegin((void*)markerPtr, null, 0);
+                Development.Profiling.Profiler.MarkerBegin((void*)markerPtr, null, 0);
             }
 #endif
         }
@@ -230,7 +230,7 @@ namespace Unity.Profiling.LowLevel.Unsafe
 #if ENABLE_PROFILER
             unsafe
             {
-                Development.Profiler.MarkerBegin((void*)markerPtr, metadata, metadataCount);
+                Development.Profiling.Profiler.MarkerBegin((void*)markerPtr, metadata, metadataCount);
             }
 #endif
         }
@@ -240,7 +240,7 @@ namespace Unity.Profiling.LowLevel.Unsafe
 #if ENABLE_PROFILER
             unsafe
             {
-                Development.Profiler.MarkerEnd((void*)markerPtr);
+                Development.Profiling.Profiler.MarkerEnd((void*)markerPtr);
             }
 #endif
         }

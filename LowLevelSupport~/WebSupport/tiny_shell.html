@@ -51,11 +51,75 @@ window.onerror = function(message, source, lineno, colno) {
 	fatal(msg);
 }
 
+// Register a callback function that will be called when the given event occurs.
+// The input system will invoke callbacks for the input events like keydown, keyup.
+var TinyEventManager = {
+	listeners: {},
+
+	addEventListener: function(type, callback) {
+		this.listeners[type] = this.listeners[type] || [];
+		if (this.listeners[type].indexOf(callback) == -1) {
+			this.listeners[type].push(callback);
+		}
+	},
+
+	removeEventListener: function(type, callback) {
+		if (this.listeners[type]) {
+			var index = this.listeners[type].indexOf(callback);
+			if (index != -1) {
+				this.listeners[type].splice(index, 1);
+			}
+		}
+	},
+
+	dispatchEvent: function(event) {
+		if (this.listeners[event.type]) {
+			this.listeners[event.type].forEach((callback) => callback(event));
+		}
+	}
+};
+
+
+// Example action: do not navigate the browser page on space bar key presses.
+function keyEvent(ev) {
+	if (document.activeElement == document.querySelector('#UT_CANVAS') && ev.key == ' ') {
+		ev.preventDefault();
+	}
+}
+TinyEventManager.addEventListener('keydown', keyEvent);
+TinyEventManager.addEventListener('keyup', keyEvent);
+
 // Depending on the build flags that one uses, different files need to be downloaded
 // to load the compiled page. The right set of files will be expanded to be downloaded
 // via the directive below.
 
 {{{ DOWNLOAD_JS_AND_WASM_FILES }}}
+
+#if SINGLE_FILE
+  var SINGLE_FILE_ASSETS = {};
+
+#if WASM2JS
+  // when building asmjs, the default base64Decode() function is not available
+  var base64Lookup = new Uint8Array(0x7B);
+  for (var i = 0; i < base64Lookup.length; i++)
+    base64Lookup[i] = i >= 0x61 ? i - 0x47 : i >= 0x41 ? i - 0x41 : i >= 0x30 ? i + 4 : i == 0x2B ? 0x3E : 0x3F;
+
+  function base64Decode(base64) {
+    var output = new Uint8Array((base64.length * 3 >> 2) - (base64[base64.length - 1] == '=') - (base64[base64.length - 2] == '='));
+    for (var j = 0, i = 0; i < base64.length; i += 4) {
+      var b = base64Lookup[base64.charCodeAt(i)] << 18 | base64Lookup[base64.charCodeAt(i + 1)] << 12 | base64Lookup[base64.charCodeAt(i + 2)] << 6 | base64Lookup[base64.charCodeAt(i + 3)];
+      output[j++] = b >> 16;
+      output[j++] = b >> 8;
+      output[j++] = b;
+    }
+    return output;
+  }
+#endif
+
+// If we are doing a SINGLE_FILE=1 build, inlined JS runtime code follows here:
+{{{ JS_CONTENTS_IN_SINGLE_FILE_BUILD }}}
+
+#endif
 
 </script>
 </body>

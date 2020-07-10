@@ -1,11 +1,11 @@
 using System;
-using Unity.Entities.Runtime.Hashing;
+using Unity.Mathematics;
 
 namespace Unity.Entities.Runtime
 {
     public static class ConfigurationScene
     {
-        public static readonly string Path = "Configuration";
-        public static readonly Guid Guid = GuidUtility.NewGuid(Path);
+        public static readonly string Name = "Configuration";
+        public static readonly Hash128 Guid = new Hash128("46b433b264c69cbd39f04ad2e5d12be8"); // This is just some guid
     }
 }

@@ -12,10 +12,12 @@ using Unity.Burst;
 using Unity.Development.PlayerConnection;
 using Unity.Collections;
 using UnityEngine.Assertions;
+using Unity.Jobs.LowLevel.Unsafe;
 
-namespace Unity.Development
+namespace Unity.Development.Profiling
 {
     // unity\Runtime\Profiler\Profiler.h
+    [Flags]
     public enum ProfilerModes : int
     {
         ProfileDisabled = 0,
@@ -61,15 +63,17 @@ namespace Unity.Development
 
             mode.Data = ProfilerModes.ProfileDisabled;
 
-            streamSession = MessageStreamManager.CreateBufferSend();
+            // This builder is tracked so all can be freed during application shutdown - no need to destroy manually
+            streamSession = MessageStreamManager.CreateStreamBuilder();
 
             Connection.RegisterMessage(EditorMessageIds.kProfilerSetMode, (MessageEventArgs a) =>
             {
+                bool oldEnabled = Enabled;
                 fixed (byte* d = a.data)
                 {
                     mode.Data = (ProfilerModes)(*(int*)d);
                 }
-                if (Enabled)
+                if (Enabled && !oldEnabled)
                 {
                     SendProfilingCapabilityMessage();
                     ProfilerProtocolSession.SendProfilingSessionInfo();
@@ -90,8 +94,6 @@ namespace Unity.Development
         public static unsafe void Shutdown()
         {
             mode.Data = ProfilerModes.ProfileDisabled;
-
-            MessageStreamManager.DestroyBufferSend(streamSession);
 
             init = false;
         }
@@ -114,7 +116,7 @@ namespace Unity.Development
         ProfilerState = 0,      // Profiler state change: enabled/disabled, mode, etc.
         MarkerInfo = 1,        // Marker information - name, metadata layout
         //Callstack = 3,          // void* to function name
-        //AllProfilerStats = 4,   // Profiler stats (written on a main thread)
+        AllProfilerStats = 4,   // Profiler stats (written on a main thread)
         //AudioInstanceData = 5,  // Combined audio stats
         //UISystemCanvas = 6,     // UI stats
         //UIEvents = 7,
@@ -148,39 +150,68 @@ namespace Unity.Development
         internal const uint kPacketBlockHeader = 0xB10C7EAD;
         internal const uint kPacketBlockFooter = 0xB10CF007;
 
+        // ProfilerMarkers already provide a Begin() and End() API, so this is only useful
+        // for procedural profiling when you don't have a ProfilerMarker object instantiated i.e.
+        //   IntPtr marker = GetOrCreateMarker("MarkerName", ...);
+        //   MarkerBegin(marker);
+        //   stack.PushMarker(marker);
+        //   [...]
+        //   marker = stack.PopMarker();
+        //   MarkerEnd(marker);
+        //
+        // This is very slow due to the lookup of the marker by name, and is reserved only for
+        // cases where there are no other options (such as the profiling callbacks built into bgfx)
+        // It is how older Unity players profiled through the UnityEngine.Profiling API,
+        // but is deprecated now in favor of the faster ProfilerMarkers.
+        internal struct MarkerStack
+        {
+            public const int k_stackSize = 32;
+            public int stackPos;
+            public unsafe fixed long beginStack[k_stackSize];
+
+            public unsafe void PushMarker(IntPtr marker)
+            {
+                if (stackPos == k_stackSize)
+                    throw new InvalidOperationException("Too many nested BeginSample() calls");
+
+                beginStack[stackPos++] = (long)marker;
+            }
+
+            public unsafe IntPtr PopMarker()
+            {
+                if (stackPos == 0)
+                    throw new InvalidOperationException("Too many EndSample() calls (no matching BeginSample)");
+
+                stackPos--;
+                return (IntPtr)beginStack[stackPos];
+            }
+        }
+
         internal ulong threadId;
 
         internal uint blockIndex;
         internal int blockSizeExpected;
         internal int blockSizeStart;
 
+        internal uint profiledFrame;
+
         internal unsafe MessageStreamBuilder *buffer;
 
-        // @@todo also store thread name?
+        internal MarkerStack markerStack;
 
-        internal bool init;
-
-        internal void Initialize(IntPtr streamId)
+        internal ProfilerProtocolStream(IntPtr streamId)
         {
-            if (init)
-                return;
             threadId = (ulong)streamId;
             blockIndex = 0;
             blockSizeStart = 0;
             blockSizeExpected = 0;
+            profiledFrame = 0;
             unsafe
             {
-                buffer = MessageStreamManager.CreateBufferSend();
+                // This builder is tracked so all can be freed during application shutdown - no need to destroy manually
+                buffer = MessageStreamManager.CreateStreamBuilder();
             }
-            init = true;
-        }
-
-        internal unsafe void Shutdown()
-        {
-            if (!init)
-                return;
-            MessageStreamManager.DestroyBufferSend(buffer);
-            init = false;
+            markerStack = new MarkerStack();
         }
 
         internal unsafe void EmitBlockBegin(ProfilerMessageType type, int byteSize)
@@ -231,33 +262,45 @@ namespace Unity.Development
 
     public class ProfilerProtocolThread
     {
-        static private readonly SharedStatic<ProfilerProtocolStream> streamThreadLocal = SharedStatic<ProfilerProtocolStream>.GetOrCreate<ProfilerProtocolSession, ProfilerProtocolStream>();
+        static private readonly SharedStatic<UIntPtr> streamTls = SharedStatic<UIntPtr>.GetOrCreate<ProfilerProtocolStream, UIntPtr>();
 
-        static internal ref ProfilerProtocolStream Stream
+        static unsafe internal ref ProfilerProtocolStream Stream
         {
             get
             {
-                if (!streamThreadLocal.Data.init)
-                    streamThreadLocal.Data.Initialize(Baselib_Thread_GetCurrentThreadId());
-                return ref streamThreadLocal.Data;
+                UIntPtr tlsHandle = streamTls.Data;
+                ProfilerProtocolStream* stream = (ProfilerProtocolStream*)Baselib_TLS_Get(tlsHandle);
+                if (stream == null)
+                {
+                    stream = (ProfilerProtocolStream*)UnsafeUtility.Malloc(sizeof(ProfilerProtocolStream), 0, Allocator.Persistent);
+                    *stream = new ProfilerProtocolStream(Baselib_Thread_GetCurrentThreadId());
+                    Baselib_TLS_Set(tlsHandle, (UIntPtr)stream);
+                }
+
+                return ref *stream;
             }
         }
 
-        static public void CleanAllThreads()
+        public unsafe static void Initialize()
         {
-            // @@todo Each thread should register itself so it can be cleaned up (init = false)
-            streamThreadLocal.Data.Shutdown();
+            streamTls.Data = Baselib_TLS_Alloc();
+        }
+
+        public unsafe static void Shutdown()
+        {
+            Baselib_TLS_Free(streamTls.Data);
         }
 
         // Threadsafe
-        static public unsafe void SendBeginSample(uint markerId, ulong sysTicks)
+        static public unsafe bool SendBeginSample(uint markerId, ulong sysTicks)
         {
             if (!PlayerConnectionProfiler.Enabled)
-                return;
+                return false;
 
             Stream.buffer->MessageBegin(EditorMessageIds.kProfilerDataMessage);
             Stream.EmitSample(ProfilerMessageType.BeginSample, markerId, sysTicks);
             Stream.buffer->MessageEnd();
+            return true;
         }
 
         // Threadsafe
@@ -311,6 +354,20 @@ namespace Unity.Development
             Stream.EmitSample(ProfilerMessageType.EndSampleWithMetadata, markerId, sysTicks, metadataCount);
             Stream.buffer->MessageEnd();
         }
+
+        static public unsafe void SendNewFrame()
+        {
+            if (!PlayerConnectionProfiler.Enabled)
+                return;
+
+            // This needs to happen with any thread that tracks by frame, and it must be the only message in the block
+            Stream.buffer->MessageBegin(EditorMessageIds.kProfilerDataMessage);
+            Stream.EmitBlockBegin(ProfilerMessageType.Frame, 12);
+            Stream.buffer->WriteData<uint>(Stream.profiledFrame++);
+            Stream.buffer->WriteData<ulong>(Profiler.GetProfilerTime());
+            Stream.EmitBlockEnd();
+            Stream.buffer->MessageEnd();
+        }
     }
 
     // unity\Modules\Profiler\Runtime\Protocol.h/cpp
@@ -329,20 +386,13 @@ namespace Unity.Development
         static readonly internal uint kSessionGlobalHeader = 0x55334450;  // 'U3DP'
         static readonly internal IntPtr kSessionId = IntPtr.Zero - 1;
 
-        static private uint profiledFrame = 0;
+        static unsafe internal ProfilerProtocolStream streamSession;
+        static public int TotalMarkers { get; private set; }
 
-        static unsafe private ProfilerProtocolStream streamSession = new ProfilerProtocolStream();
-
-        static unsafe internal void Initialize()
+        static internal void Initialize()
         {
-            streamSession.Initialize(kSessionId);
+            streamSession = new ProfilerProtocolStream(kSessionId);
         }
-
-        static unsafe internal void Shutdown()
-        {
-            streamSession.Shutdown();
-        }
-
 
         //---------------------------------------------------------------------------------------------------
         // Helpers
@@ -399,19 +449,31 @@ namespace Unity.Development
             streamSession.EmitBlockEnd();
         }
 
-        static internal unsafe void EmitNewMarkersAndThreads()
+        static internal unsafe void EmitNewMarkersAndThreads(bool forceEmitAll)
         {
             // All markers we know about
             var markerBufferNode = Profiler.MarkersHeadBufferNode;
             while (markerBufferNode != null)
             {
+                if (markerBufferNode->isNew)
+                {
+                    // We don't do this on initial allocation because it can happen before all statics are initialized, when
+                    // AccumStats is not be ready yet
+                    ProfilerStats.AccumStats.memReservedProfiler.Accumulate(Profiler.k_HashChunkSize);
+                    ProfilerStats.AccumStats.memUsedProfiler.Accumulate(Profiler.k_HashChunkSize);
+                    markerBufferNode->isNew = false;
+                }
                 for (int i = 0; i < markerBufferNode->size; i++)
                 {
                     var marker = &markerBufferNode->MarkersBuffer[i];
-                    if (!marker->init && marker->nameBytes > 0)
+                    if (marker->nameBytes > 0 && (forceEmitAll || !marker->init))
                     {
                         EmitMarkerInfo(marker->markerId, marker->categoryId, marker->flags, marker->nameUtf8, marker->nameBytes, 0);
-                        marker->init = true;
+                        if (!marker->init)
+                        {
+                            TotalMarkers++;
+                            marker->init = true;
+                        }
                     }
                 }
                 markerBufferNode = markerBufferNode->next;
@@ -421,10 +483,18 @@ namespace Unity.Development
             var threadBufferNode = Profiler.ThreadsHeadBufferNode;
             while (threadBufferNode != null)
             {
+                if (threadBufferNode->isNew)
+                {
+                    // We don't do this on initial allocation because it can happen before all statics are initialized, when
+                    // AccumStats is not be ready yet
+                    ProfilerStats.AccumStats.memReservedProfiler.Accumulate(Profiler.k_HashChunkSize);
+                    ProfilerStats.AccumStats.memUsedProfiler.Accumulate(Profiler.k_HashChunkSize);
+                    threadBufferNode->isNew = false;
+                }
                 for (int i = 0; i < threadBufferNode->size; i++)
                 {
                     var thread = &threadBufferNode->ThreadsBuffer[i];
-                    if (!thread->init && thread->nameBytes > 0)
+                    if (thread->nameBytes > 0 && (forceEmitAll || !thread->init))
                     {
                         EmitThreadInfo(thread->threadId, thread->sysTicksStart, thread->frameIndependent, 
                             thread->groupUtf8, thread->groupBytes, thread->nameUtf8, thread->nameBytes);
@@ -462,10 +532,10 @@ namespace Unity.Development
             streamSession.EmitBlockBegin(ProfilerMessageType.ProfilerState, 16);
             streamSession.buffer->WriteData<uint>(1);  // flags - currently only [0x01 : enabled] is defined
             streamSession.buffer->WriteData<ulong>(ticks);
-            streamSession.buffer->WriteData<uint>(profiledFrame);
+            streamSession.buffer->WriteData<uint>(streamSession.profiledFrame);
             streamSession.EmitBlockEnd();
 
-            EmitNewMarkersAndThreads();
+            EmitNewMarkersAndThreads(true);
 
             streamSession.buffer->MessageEnd();
         }
@@ -479,33 +549,57 @@ namespace Unity.Development
                 return;
 
             streamSession.buffer->MessageBegin(EditorMessageIds.kProfilerDataMessage);
-            EmitNewMarkersAndThreads();
+            EmitNewMarkersAndThreads(false);
             streamSession.buffer->MessageEnd();
 
             Profiler.NeedsUpdate = false;
         }
 
-        // Threadsafe but must be called from main thread
+        // Threadsafe - must be only message in the block
         static public unsafe void SendNewFrame()
         {
-            // New frame must always belong to a "main thread" block and be the only message in the block
             if (!PlayerConnectionProfiler.Enabled)
                 return;
 
-            // This needs to happen with the main thread id and be the only message in the block - it is the only message
-            // in the profiler system with either of these constraints
+            // This needs to happen with the main thread id (not the session id) and be the only message in the block.
+            // Note it can (and should) also be sent from other threads - the above comment only refers to main thread vs. session "thread",
+            // which is the context of the method call we are in.
+            streamSession.profiledFrame++;
+            ProfilerProtocolThread.SendNewFrame();
+        }
+
+        static public unsafe void SendProfilerStats()
+        {
+            if (!PlayerConnectionProfiler.Enabled)
+                return;
+
             ProfilerProtocolThread.Stream.buffer->MessageBegin(EditorMessageIds.kProfilerDataMessage);
-            ProfilerProtocolThread.Stream.EmitBlockBegin(ProfilerMessageType.Frame, 12);
-            ProfilerProtocolThread.Stream.buffer->WriteData<uint>(profiledFrame++);
-            ProfilerProtocolThread.Stream.buffer->WriteData<ulong>(Profiler.GetProfilerTime());
+
+            int bytesData = 4 + 4 + sizeof(ProfilerStats.AllProfilerStats);
+
+            ProfilerProtocolThread.Stream.EmitBlockBegin(ProfilerMessageType.AllProfilerStats, bytesData);
+            // While technically 32 bits isn't necessary, the protocol uses it to enforce alignment on following 32 bit values
+            ProfilerProtocolThread.Stream.buffer->WriteData((int)ProfilerStats.GatheredStats);
+            // The profiler protocol expects the profiler stats stream to be a collection of ints, and size is expected to be number of ints, not byte size
+            ProfilerProtocolThread.Stream.buffer->WriteData(sizeof(ProfilerStats.AllProfilerStats) / 4);
+            ProfilerProtocolThread.Stream.buffer->WriteData(ProfilerStats.Stats);
             ProfilerProtocolThread.Stream.EmitBlockEnd();
+
             ProfilerProtocolThread.Stream.buffer->MessageEnd();
         }
     }
 
     public static class Profiler
     {
-        private const int kHashChunkSize = 65536;
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_LockProfilerHashTables();
+
+        [DllImport("lib_unity_zerojobs")]
+        private static extern void PlayerConnectionMt_UnlockProfilerHashTables();
+
+        private const int k_MaxMarkerNameLength = 107;
+        private const int k_MaxThreadNameLength = 47;
+        internal const int k_HashChunkSize = 65536;
 
         // 1 marker info = 124/128 bytes (for 32/64 bit next pointers)
         [StructLayout(LayoutKind.Sequential)]
@@ -515,30 +609,9 @@ namespace Unity.Development
             internal ushort flags;
             internal ushort categoryId;
             internal int nameBytes;
-            internal fixed byte nameUtf8[103];
+            internal fixed byte nameUtf8[k_MaxMarkerNameLength];
             internal bool init;
-            internal MarkerBucketNode* next;
-        }
-
-        // Allocating chunks of 64k for Markers
-        [StructLayout(LayoutKind.Sequential)]
-        internal unsafe struct MarkerHashTableBufferNode
-        {
-            internal fixed byte markersBuf[kHashChunkSize - 128];
-            internal int capacity;
-            internal int size;
-            internal MarkerHashTableBufferNode* next;
-
-            internal MarkerBucketNode* MarkersBuffer
-            {
-                get
-                {
-                    fixed (byte* b = markersBuf)
-                    {
-                        return (MarkerBucketNode*)b;
-                    }
-                }
-            }
+            internal MarkerBucketNode* next;  // offset 120
         }
 
         // 1 thread info = 124/128 bytes (for 32/64 bit next pointers)
@@ -548,64 +621,126 @@ namespace Unity.Development
             internal ulong threadId;
             internal ulong sysTicksStart;
             internal int groupBytes;
-            internal fixed byte groupUtf8[47];
+            internal fixed byte groupUtf8[k_MaxThreadNameLength];
             internal bool frameIndependent;
-            internal int nameBytes;
-            internal fixed byte nameUtf8[47];
+            internal int nameBytes;  // offset 68
+            internal fixed byte nameUtf8[k_MaxThreadNameLength];
             internal bool init;
             internal ThreadBucketNode* next;  // offset 120
         }
 
-        // Allocating chunks of 64k for Threads
+        // Allocating chunks of 64k for Markers
         [StructLayout(LayoutKind.Sequential)]
-        internal unsafe struct ThreadHashTableBufferNode
+        internal unsafe struct FastHashTableBufferNode
         {
-            internal fixed byte threadsBuf[kHashChunkSize - 128];
+            internal fixed byte buffer[k_HashChunkSize - 128];
             internal int capacity;
             internal int size;
-            internal ThreadHashTableBufferNode* next;
+            internal FastHashTableBufferNode* next;
+            internal bool isNew;
+
+            internal static unsafe FastHashTableBufferNode* Allocate(int typeSize)
+            {
+                var node = (FastHashTableBufferNode*)UnsafeUtility.Malloc(k_HashChunkSize, 16, Allocator.Persistent);
+                UnsafeUtility.MemClear(node, k_HashChunkSize);
+                node->capacity = (k_HashChunkSize - 128) / typeSize;
+                node->size = 256;  // number of buckets
+                node->isNew = true;
+                return node;
+            }
+
+            // Returns the new tail (old one if pool not extended)
+            internal unsafe FastHashTableBufferNode* ExtendFullPool(int typeSize)
+            {
+                if (size == capacity)
+                {
+                    FastHashTableBufferNode* newPool = Allocate(typeSize);
+                    newPool->size = 0;
+                    next = newPool;
+                    return newPool;
+                }
+
+                fixed (FastHashTableBufferNode* self = &this)
+                    return self;
+            }
+
+            internal MarkerBucketNode* MarkersBuffer
+            {
+                get
+                {
+                    fixed (byte* b = buffer)
+                        return (MarkerBucketNode*)b;
+                }
+            }
 
             internal ThreadBucketNode* ThreadsBuffer
             {
                 get
                 {
-                    fixed (byte* b = threadsBuf)
-                    {
+                    fixed (byte* b = buffer)
                         return (ThreadBucketNode*)b;
-                    }
                 }
             }
         }
 
-        internal unsafe static MarkerHashTableBufferNode* MarkersHeadBufferNode => markerHashTableHead;
-        internal unsafe static ThreadHashTableBufferNode* ThreadsHeadBufferNode => threadHashTableHead;
+        internal unsafe static FastHashTableBufferNode* MarkersHeadBufferNode => markerHashTableHead;
+        internal unsafe static FastHashTableBufferNode* ThreadsHeadBufferNode => threadHashTableHead;
 
-        private unsafe static MarkerHashTableBufferNode* markerHashTableHead = null;
-        private unsafe static MarkerHashTableBufferNode* markerHashTableTail = null;
+        private unsafe static FastHashTableBufferNode* markerHashTableHead = null;
+        private unsafe static FastHashTableBufferNode* markerHashTableTail = null;
         private static uint nextMarkerId = 0;
 
-        private unsafe static ThreadHashTableBufferNode* threadHashTableHead = null;
-        private unsafe static ThreadHashTableBufferNode* threadHashTableTail = null;
+        private unsafe static FastHashTableBufferNode* threadHashTableHead = null;
+        private unsafe static FastHashTableBufferNode* threadHashTableTail = null;
 
         private static bool initialized = false;
         internal static bool NeedsUpdate { get; set; } = false;
 
-        public static void Initialize()
+        public static unsafe void Initialize()
         {
             if (initialized)
                 return;
             PlayerConnectionProfiler.Initialize();
             ProfilerProtocolSession.Initialize();
+            ProfilerProtocolThread.Initialize();
+
             ThreadSetInfo((ulong)Baselib_Thread_GetCurrentThreadId(), GetProfilerTime(), false, "", "Main Thread");
+
             initialized = true;
         }
 
-        public static void Shutdown()
+        public static unsafe void Shutdown()
         {
             if (!initialized)
                 return;
-            ProfilerProtocolThread.CleanAllThreads();
-            ProfilerProtocolSession.Shutdown();
+
+            FastHashTableBufferNode* node = markerHashTableHead;
+            while (node != null)
+            {
+                var prevNode = node;
+                node = node->next;
+                UnsafeUtility.Free(prevNode, Allocator.Persistent);
+                ProfilerStats.AccumStats.memReservedProfiler.Accumulate(-k_HashChunkSize);
+                ProfilerStats.AccumStats.memUsedProfiler.Accumulate(-k_HashChunkSize);
+            }
+            markerHashTableHead = null;
+            markerHashTableTail = null;
+            node = threadHashTableHead;
+            while (node != null)
+            {
+                var prevNode = node;
+                node = node->next;
+                UnsafeUtility.Free(prevNode, Allocator.Persistent);
+                ProfilerStats.AccumStats.memReservedProfiler.Accumulate(-k_HashChunkSize);
+                ProfilerStats.AccumStats.memUsedProfiler.Accumulate(-k_HashChunkSize);
+            }
+            threadHashTableHead = null;
+            threadHashTableTail = null;
+
+            nextMarkerId = 0;
+            NeedsUpdate = false;
+
+            ProfilerProtocolThread.Shutdown();
             PlayerConnectionProfiler.Shutdown();
             initialized = false;
         }
@@ -672,24 +807,24 @@ namespace Unity.Development
             return new string(chars);
         }
 
-        // @@TODO need threadsafe/burstsafe
+        // Burst/thread safe
         internal static unsafe void* MarkerGetOrCreate(ushort categoryId, byte* name, int nameBytes, ushort flags)
         {
             if (nameBytes <= 0)
                 return null;
 
-            if (nextMarkerId == 0)
+            if (markerHashTableHead == null)
             {
-                markerHashTableHead = (MarkerHashTableBufferNode*)UnsafeUtility.Malloc(kHashChunkSize, 16, Allocator.Persistent);
-                *markerHashTableHead = new MarkerHashTableBufferNode();
-                markerHashTableHead->capacity = (kHashChunkSize - 128) / sizeof(MarkerBucketNode);
-                markerHashTableHead->size = 256;  // number of buckets
+                markerHashTableHead = FastHashTableBufferNode.Allocate(sizeof(MarkerBucketNode));
                 markerHashTableTail = markerHashTableHead;
             }
 
             int bucket = (((nameBytes << 5) + (nameBytes >> 2)) ^ name[0]) & 255;
             MarkerBucketNode* next = &markerHashTableHead->MarkersBuffer[bucket];
             MarkerBucketNode* marker = null;
+
+            // No need for locking yet - read operations on hash table are thread safe as long as we are careful about
+            // modification during write and only allow one thread to write at a time.
             while (next != null)
             {
                 marker = next;
@@ -707,21 +842,22 @@ namespace Unity.Development
                 }
             }
 
+            // The marker didn't exist in hash table. Need to lock so only one thread can modify at a time.
+            // This path will usually only be taken during startup - after which markers should be found in the
+            // above loop instead of needing to be created. Even this is a worse-case scenario because correct ProfilerMarker
+            // usage will create/get them once, and they will exist as an instance which only calls MarkerBegin() and MarkerEnd()
+            // when needed.
+            PlayerConnectionMt_LockProfilerHashTables();
+
+            MarkerBucketNode* oldMarker = null;
             if (marker->nameBytes > 0)
             {
                 // There is already a valid marker here at the end of the linked list - add a new one
-                if (markerHashTableHead->size == markerHashTableHead->capacity)
-                {
-                    MarkerHashTableBufferNode* newPool = (MarkerHashTableBufferNode*)UnsafeUtility.Malloc(kHashChunkSize, 16, Allocator.Persistent);
-                    UnsafeUtility.MemClear(newPool, kHashChunkSize);
-                    newPool->capacity = (kHashChunkSize - 128) / sizeof(MarkerBucketNode);
-                    markerHashTableTail->next = newPool;
-                    markerHashTableTail = newPool;
-                }
+                markerHashTableTail = markerHashTableTail->ExtendFullPool(sizeof(MarkerBucketNode));
 
                 MarkerBucketNode* newMarker = &markerHashTableTail->MarkersBuffer[markerHashTableTail->size];
                 markerHashTableTail->size++;
-                marker->next = newMarker;
+                oldMarker = marker;
                 marker = newMarker;
             }
 
@@ -730,44 +866,51 @@ namespace Unity.Development
             marker->flags = flags;
             marker->markerId = nextMarkerId++;
             marker->nameBytes = nameBytes;
-            UnsafeUtility.MemCpy(marker->nameUtf8, name, nameBytes);
+
+            // Todo: When Burst printing works we should warn the user if a name is too long and will be truncated
+            UnsafeUtility.MemCpy(marker->nameUtf8, name, Math.Min(nameBytes, k_MaxMarkerNameLength));
+
+            // Do this last so if we find the node before locking, we don't have access to it unless it is otherwise fully assigned
+            if (oldMarker != null)
+                oldMarker->next = marker;
+
+            PlayerConnectionMt_UnlockProfilerHashTables();
 
             NeedsUpdate = true;
 
             return marker;
         }
 
-        // Burst safe
-        // @@TODO need threadsafe
+        // Burst/Thread safe
         internal static unsafe void MarkerBegin(void* markerPtr, void* metadata, int metadataBytes)
         {
             MarkerBucketNode* marker = (MarkerBucketNode*)markerPtr;
-            ProfilerProtocolThread.SendBeginSample(marker->markerId, Profiler.GetProfilerTime());
+            ProfilerProtocolThread.SendBeginSample(marker->markerId, GetProfilerTime());
         }
 
-        // Burst safe
-        // @@TODO need threadsafe
+        // Burst/Thread safe
         internal static unsafe void MarkerEnd(void* markerPtr)
         {
             MarkerBucketNode* marker = (MarkerBucketNode*)markerPtr;
-            ProfilerProtocolThread.SendEndSample(marker->markerId, Profiler.GetProfilerTime());
+            ProfilerProtocolThread.SendEndSample(marker->markerId, GetProfilerTime());
         }
 
-        // NOT Burst/Thread safe
+        // NOT Burst safe due to string usage
+        // Thread safe
         internal static unsafe void ThreadSetInfo(ulong threadId, ulong sysTicksStart, bool frameIndependent, string threadGroup, string threadName)
         {
             if (threadHashTableHead == null)
             {
-                threadHashTableHead = (ThreadHashTableBufferNode*)UnsafeUtility.Malloc(kHashChunkSize, 16, Allocator.Persistent);
-                *threadHashTableHead = new ThreadHashTableBufferNode();
-                threadHashTableHead->capacity = (kHashChunkSize - 128) / sizeof(ThreadBucketNode);
-                threadHashTableHead->size = 256;  // number of buckets
+                threadHashTableHead = FastHashTableBufferNode.Allocate(sizeof(ThreadBucketNode));
                 threadHashTableTail = threadHashTableHead;
             }
 
             int bucket = (int)threadId & 255;
             ThreadBucketNode* next = &threadHashTableHead->ThreadsBuffer[bucket];
             ThreadBucketNode* thread = null;
+
+            // No need for locking yet - read operations on hash table are thread safe as long as we are careful about
+            // modification during write and only allow one thread to write at a time.
             while (next != null)
             {
                 thread = next;
@@ -777,48 +920,47 @@ namespace Unity.Development
                 {
                     // Make sure info is up to date
                     fixed (char* c = threadGroup)
-                    {
-                        thread->groupBytes = UTF8.GetBytes(c, threadGroup.Length, thread->groupUtf8, 47);
-                    }
+                        thread->groupBytes = UTF8.GetBytes(c, threadGroup.Length, thread->groupUtf8, k_MaxThreadNameLength);
                     fixed (char* c = threadName)
-                    {
-                        thread->nameBytes = UTF8.GetBytes(c, threadName.Length, thread->nameUtf8, 47);
-                    }
+                        thread->nameBytes = UTF8.GetBytes(c, threadName.Length, thread->nameUtf8, k_MaxThreadNameLength);
                     thread->frameIndependent = frameIndependent;
                     return;
                 }
             }
 
+            // The thread info didn't exist in hash table. Need to lock so only one thread can modify at a time.
+            // This path will usually only be taken during startup when creating threads - after which thread info
+            // should be found in the above loop instead of needing to be created.
+            PlayerConnectionMt_LockProfilerHashTables();
+
+            ThreadBucketNode* oldThread = null;
             if (thread->nameBytes > 0 || thread->groupBytes > 0)
             {
                 // There is already a valid thread here at the end of the linked list - add a new one
-                if (threadHashTableHead->size == threadHashTableHead->capacity)
-                {
-                    ThreadHashTableBufferNode* newPool = (ThreadHashTableBufferNode*)UnsafeUtility.Malloc(kHashChunkSize, 16, Allocator.Persistent);
-                    UnsafeUtility.MemClear(newPool, kHashChunkSize);
-                    newPool->capacity = (kHashChunkSize - 128) / sizeof(ThreadBucketNode);
-                    threadHashTableTail->next = newPool;
-                    threadHashTableTail = newPool;
-                }
+                threadHashTableTail = threadHashTableTail->ExtendFullPool(sizeof(ThreadBucketNode));
 
                 ThreadBucketNode* newThread = &threadHashTableTail->ThreadsBuffer[threadHashTableTail->size];
                 threadHashTableTail->size++;
-                thread->next = newThread;
+                oldThread = thread;
                 thread = newThread;
             }
 
             thread->init = false;
+            Assert.IsTrue(thread->nameBytes <= k_MaxThreadNameLength);
+            Assert.IsTrue(thread->groupBytes <= k_MaxThreadNameLength);
             fixed (char* c = threadGroup)
-            {
-                thread->groupBytes = UTF8.GetBytes(c, threadGroup.Length, thread->groupUtf8, 47);
-            }
+                thread->groupBytes = UTF8.GetBytes(c, threadGroup.Length, thread->groupUtf8, k_MaxThreadNameLength);
             fixed (char* c = threadName)
-            {
-                thread->nameBytes = UTF8.GetBytes(c, threadName.Length, thread->nameUtf8, 47);
-            }
+                thread->nameBytes = UTF8.GetBytes(c, threadName.Length, thread->nameUtf8, k_MaxThreadNameLength);
             thread->frameIndependent = frameIndependent;
             thread->sysTicksStart = sysTicksStart;
             thread->threadId = threadId;
+
+            // Do this last so if we find the node before locking, we don't have access to it unless it is otherwise fully assigned
+            if (oldThread != null)
+                oldThread->next = thread;
+
+            PlayerConnectionMt_UnlockProfilerHashTables();
 
             NeedsUpdate = true;
         }

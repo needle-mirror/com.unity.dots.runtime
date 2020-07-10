@@ -1,6 +1,7 @@
 #include <allocators.h>
 #include <baselibext.h>
 #include <C/Baselib_Memory.h>
+#include <C/Baselib_Atomic.h>
 
 #include "guard.h"
 #include "BumpAllocator.h"
@@ -10,7 +11,7 @@
 
 using namespace Unity::LowLevel;
 
-#ifdef GUARD_HEAP
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
 #include <vector>
 #endif
 
@@ -39,14 +40,86 @@ static const int ARCH_ALIGNMENT = 8;
 #error Unknown pointer size or missing size macros!
 #endif
 
-static void* lastFreePtr = 0;
-static int64_t heapUsage[(int)Allocator::NumAllocators] = {0};   // Debugging, single threaded. (Needs mutex for MT).
+static int64_t heapUsage[(int)Allocator::NumAllocators] = { 0 };   // Debugging, multithread safe
 
-#ifdef GUARD_HEAP
-static std::vector<void*> sBumpAllocTrack;         // Seperately tracks memory in the bump allocator, so it can be checked with Guards
-#endif
 static BumpAllocator sBumpAlloc;
 static baselib::Lock sBumpAllocMutex;
+
+static inline int checkAlignment(int alignOf)
+{
+    // Alignment is a power of 2
+    MEM_ASSERT(alignOf == 0 || ((alignOf - 1) & alignOf) == 0);
+
+    // Alignment is not greater than 65536
+    MEM_ASSERT(alignOf < 65536);
+
+    if (alignOf < ARCH_ALIGNMENT)
+        alignOf = ARCH_ALIGNMENT;
+
+    return alignOf;
+}
+
+static inline int64_t calcPaddedSize(int64_t userSize, int headerSize)
+{
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
+    return
+        headerSize +                            // Size for the header, or alignOf, whichever is greater.
+        userSize +                              // Size of user request
+        GUARD_PAD;                              // Size of tail buffer (in bytes - no need to align)
+#else
+    (void)headerSize;
+    return userSize;
+#endif
+}
+
+static void checkAllocation(void* userPtr, int64_t userSize, int headerSize, bool initBuffer_0xbc, Allocator allocatorType)
+{
+    // Track memory size and pointer
+#ifdef TRACY_ENABLE
+    TracyAlloc(userPtr, userSize);
+#endif
+
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
+    int64_t paddedSize = calcPaddedSize(userSize, headerSize);
+    int64_t old;
+    Baselib_atomic_fetch_add_64_relaxed_v(&heapUsage[(int)allocatorType], &paddedSize, &old);
+
+    setupGuardedMemory(userPtr, headerSize, userSize, initBuffer_0xbc);
+
+#else
+#ifndef TRACY_ENABLE
+    (void)userPtr;
+    (void)userSize;
+#endif
+    (void)headerSize;
+    (void)allocatorType;
+#endif
+}
+
+static void* checkDeallocation(void* userPtr, bool willFreeMem, Allocator allocatorType)
+{
+#ifdef TRACY_ENABLE
+    TracyFree(userPtr);
+#endif
+
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
+    if (!userPtr)
+        return nullptr;
+
+    checkGuardedMemory(userPtr, willFreeMem);
+
+    GuardHeader* head = (GuardHeader*)userPtr - 1;
+
+    int64_t old;
+    int64_t paddedSizeNeg = -calcPaddedSize(head->data.size, head->data.offset);
+    Baselib_atomic_fetch_add_64_relaxed_v(&heapUsage[(int)allocatorType], &paddedSizeNeg, &old);
+
+    return (void*)((uint8_t*)userPtr - head->data.offset);
+#else
+    (void)allocatorType;
+    return userPtr;
+#endif
+}
 
 extern "C" 
 {
@@ -54,27 +127,14 @@ extern "C"
 DOEXPORT
 void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignOf, Allocator allocatorType)
 {
-    // Alignment is a power of 2
-    MEM_ASSERT(alignOf == 0 || ((alignOf - 1) & alignOf) == 0);
+    alignOf = checkAlignment(alignOf);
 
-    // Alignment is not greater than 65536
-    MEM_ASSERT(alignOf < 65536);
-    
-    if (alignOf < ARCH_ALIGNMENT)
-        alignOf = ARCH_ALIGNMENT;
-
-#ifdef GUARD_HEAP
-    heapUsage[(int)allocatorType] += size;
-
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
     int headerSize = alignOf < sizeof(GuardHeader) ? sizeof(GuardHeader) : alignOf;
-    int64_t paddedSize = 
-        headerSize +                            // Size for the header, or alignOf, whichever is greater.
-        size +                                  // Size of user request
-        GUARD_PAD;                              // Size of tail buffer (in bytes - no need to align)
 #else
     int headerSize = 0;
-    int64_t paddedSize = size;
 #endif
+    int64_t paddedSize = calcPaddedSize(size, headerSize);
 
     void* memBase;
     void* memUser;
@@ -83,25 +143,49 @@ void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignOf, Allocator alloc
         BaselibLock lock(sBumpAllocMutex);
         memBase = sBumpAlloc.alloc((int)paddedSize, alignOf);
         memUser = (void*)((uint8_t*)memBase + headerSize);
-
-#ifdef GUARD_HEAP
-        sBumpAllocTrack.push_back(memUser);
-#endif
     }
     else
     {
         memBase = Baselib_Memory_AlignedAllocate(paddedSize, alignOf);
         memUser = (void*)((uint8_t*)memBase + headerSize);
-
-        // Track memory size and pointer
-#ifdef TRACY_ENABLE
-        TracyAlloc(memUser, size);
-#endif
     }
 
-#ifdef GUARD_HEAP
-    setupGuardedMemory(memUser, headerSize, size);
+    checkAllocation(memUser, size, headerSize, true, allocatorType);
+
+    return memUser;
+}
+
+// To support the same debug/performance tools in some native 3rd party libraries as we do everywhere else
+// which allocates native memory on the heap
+DOEXPORT
+void* CALLEXPORT unsafeutility_realloc(void* ptr, int64_t newSize, int alignOf, Allocator allocatorType)
+{
+    // For now, only support reallocation of persistent memory
+    MEM_ASSERT(allocatorType == Allocator::Persistent);
+
+    // This isn't per spec for standard c realloc calls, but some 3rd party libraries rely on this
+    // behaviour so we'll implement it to ensure no hidden issues.
+    if (newSize == 0)
+    {
+        unsafeutility_free(ptr, allocatorType);
+        return nullptr;
+    }
+
+    alignOf = checkAlignment(alignOf);
+
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
+    int headerSize = alignOf < sizeof(GuardHeader) ? sizeof(GuardHeader) : alignOf;
+#else
+    int headerSize = 0;
 #endif
+    int64_t paddedSize = calcPaddedSize(newSize, headerSize);
+
+    void* realPtr = checkDeallocation(ptr, false, allocatorType);
+
+    void* memBase = Baselib_Memory_AlignedReallocate(realPtr, paddedSize, alignOf);
+    void* memUser = (void*)((uint8_t*)memBase + headerSize);
+
+    checkAllocation(memUser, newSize, headerSize, ptr == nullptr, allocatorType);
 
     return memUser;
 }
@@ -110,7 +194,7 @@ DOEXPORT
 void CALLEXPORT unsafeutility_assertheap(void* ptr)
 {
     MEM_ASSERT(ptr);
-#ifdef GUARD_HEAP
+#ifdef ENABLE_UNITY_COLLECTIONS_CHECKS
     checkGuardedMemory(ptr, false);
 #endif
 }
@@ -118,44 +202,21 @@ void CALLEXPORT unsafeutility_assertheap(void* ptr)
 DOEXPORT
 void CALLEXPORT unsafeutility_free(void* ptr, Allocator allocatorType)
 {
-    lastFreePtr = ptr;
     if (ptr == nullptr)
         return;
 
-#ifdef GUARD_HEAP
-    checkGuardedMemory(ptr, true);
-#endif
+    void* realPtr = checkDeallocation(ptr, true, allocatorType);
 
     if (allocatorType == Allocator::Temp)
         return;
-
-#ifdef TRACY_ENABLE
-    TracyFree(ptr);
-#endif
-
-#ifdef GUARD_HEAP
-    GuardHeader* head = (GuardHeader*)((uint8_t*)ptr - sizeof(GuardHeader));
-    GuardHeader* realPtr = (GuardHeader*)((uint8_t*)ptr - head->offset);
-    heapUsage[(int)allocatorType] -= head->size;
-#else
-    void* realPtr = ptr;
-#endif
 
     Baselib_Memory_AlignedFree(realPtr);
 }
 
 DOEXPORT
-void* CALLEXPORT unsafeutility_get_last_free_ptr()
+int64_t CALLEXPORT unsafeutility_get_heap_size(Allocator allocatorType)
 {
-    // Useful debugging trick - did the resources we except to be deleted by opaque code get deleted?
-    // But only reliable single-threaded.
-    return lastFreePtr;
-}
-
-DOEXPORT
-long CALLEXPORT unsafeutility_get_heap_size(Allocator allocatorType)
-{
-    return (long) heapUsage[(int)allocatorType];
+    return heapUsage[(int)allocatorType];
 }
 
 DOEXPORT
@@ -174,14 +235,8 @@ DOEXPORT
 void CALLEXPORT unsafeutility_freetemp()
 {
     BaselibLock lock(sBumpAllocMutex);
-
-#ifdef GUARD_HEAP
-    for (void *ptr : sBumpAllocTrack)
-        checkGuardedMemory(ptr, true);
-    sBumpAllocTrack.clear();
-#endif
-
     sBumpAlloc.reset();
+    heapUsage[(int)Allocator::Temp] = 0;
 }
 
 #define UNITY_MEMCPY memcpy
@@ -223,7 +278,7 @@ DOEXPORT
 void CALLEXPORT unsafeutility_memcpyreplicate(void* dst, void* src, int size, int count)
 {
     uint8_t* dstbytes = (uint8_t*)dst;
-    // TODO something smarter
+    // TODO something smarter	
     for (int i = 0; i < count; ++i)
     {
         memcpy(dstbytes, src, size);

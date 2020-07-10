@@ -1,12 +1,27 @@
 using System;
+using System.Linq;
 using System.IO;
 using Unity.Build;
 using Unity.Build.Common;
+using Unity.Build.DotsRuntime;
+using BuildTarget = Unity.Build.DotsRuntime.BuildTarget;
 
 namespace Unity.Entities.Runtime.Build
 {
-    sealed class DotsRuntimeBuildPipeline : BuildPipelineBase
+    sealed class DotsRuntimeBuildPipeline : DotsRuntimeBuildPipelineBase
     {
+        public DotsRuntimeBuildPipeline()
+        {
+        }
+
+        public override Type[] UsedComponents
+        {
+            get
+            {
+                return base.UsedComponents.Concat(TargetUsedComponents).Distinct().ToArray();
+            }
+        }
+
         public override BuildStepCollection BuildSteps { get; } = new[]
         {
             typeof(BuildStepExportEntities),
@@ -34,6 +49,11 @@ namespace Unity.Entities.Runtime.Build
 
         protected override BoolResult OnCanRun(RunContext context)
         {
+            if (!Target.CanRun)
+            {
+                return BoolResult.False("Run is not supported with current build settings");
+            }
+
             var artifact = context.GetLastBuildArtifact<DotsRuntimeBuildArtifact>();
             if (artifact == null)
             {

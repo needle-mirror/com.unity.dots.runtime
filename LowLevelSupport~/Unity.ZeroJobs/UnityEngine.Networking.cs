@@ -26,17 +26,15 @@ namespace UnityEngine.Networking.PlayerConnection
 
 #if ENABLE_PLAYERCONNECTION
         private unsafe MessageStreamBuilder* buffer;
-
-        internal unsafe void Initialize()
-        {
-            buffer = MessageStreamManager.CreateBufferSend();
-        }
-
-        internal unsafe void Shutdown()
-        {
-            MessageStreamManager.DestroyBufferSend(buffer);
-        }
 #endif
+
+        public unsafe PlayerConnection()
+        {
+#if ENABLE_PLAYERCONNECTION
+            // This builder is tracked so all can be freed during application shutdown - no need to destroy manually
+            buffer = MessageStreamManager.CreateStreamBuilder();
+#endif
+        }
 
         public void Register(Guid messageId, UnityAction<MessageEventArgs> callback)
         {

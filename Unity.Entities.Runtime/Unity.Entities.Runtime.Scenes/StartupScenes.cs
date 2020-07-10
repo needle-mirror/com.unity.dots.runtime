@@ -1,5 +1,3 @@
-using Unity.Entities;
-
 namespace Unity.Entities.Runtime
 {
     /// <summary>
@@ -8,6 +6,6 @@ namespace Unity.Entities.Runtime
     //[HideInInspector]
     public struct StartupScenes : IBufferElementData
     {
-        public SceneReference SceneReference;
+        public Unity.Entities.SceneReference SceneReference;
     }
 }

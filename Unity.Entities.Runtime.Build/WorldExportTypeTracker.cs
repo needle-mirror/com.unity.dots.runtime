@@ -18,8 +18,12 @@ namespace Unity.Entities.Runtime.Build
                 world.EntityManager.GetAllArchetypes(archetypes);
                 foreach (var arch in archetypes)
                 {
-                    if (arch.ChunkCount == 0)
-                        continue;
+                    unsafe
+                    {
+                        if (arch.Archetype->EntityCount == 0)
+                            continue;
+                    }
+
                     using (var types = arch.GetComponentTypes())
                     {
                         foreach (var atype in types)

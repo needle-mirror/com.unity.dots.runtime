@@ -20,3 +20,10 @@ var UT_ASSETS;
  * @suppress {duplicate, undefinedVars}
  */
 var fatal = function(msg) {};
+
+// TinyEventManager is defined in tiny_shell.html. That file is outside of Closure's minification boundary, so references there
+// need to be declared as externs.
+/**
+ * @suppress {duplicate, undefinedVars}
+ */
+var TinyEventManager = {};

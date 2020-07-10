@@ -57,25 +57,6 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         @"Unity.Physics" // Currently generates warnings
     };
 
-    public virtual bool IsSupportedFor(CSharpProgramConfiguration config)
-    {
-        if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
-        {
-            if (IncludePlatforms?.Any(p => p.GetType().IsInstanceOfType(dotsConfig.Platform)) ?? false)
-                return true;
-
-            if (IncludePlatforms?.Any() ?? false)
-                return false;
-            
-            if (!ExcludePlatforms?.Any() ?? true)
-                return true;
-
-            return !ExcludePlatforms?.Any(p => p.GetType().IsInstanceOfType(dotsConfig.Platform)) ?? true;
-        }
-
-        return false;
-    }
-
     public DotsRuntimeCSharpProgram(NPath mainSourcePath,
         IEnumerable<NPath> extraSourcePaths = null,
         string name = null,
@@ -118,17 +99,23 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
 
         LanguageVersion = "7.3";
         Defines.Add(
-            "UNITY_DOTSPLAYER",
-            "NET_DOTS",
-            "NET_STANDARD_2_0",
+            "UNITY_DOTSPLAYER", // this is deprecated and we should remove in the distant future
+            "UNITY_DOTSRUNTIME",
             "UNITY_2018_3_OR_NEWER",
             "UNITY_2019_1_OR_NEWER",
             "UNITY_2019_2_OR_NEWER",
-            "UNITY_2019_3_OR_NEWER"
+            "UNITY_2019_3_OR_NEWER",
+            "UNITY_2020_1_OR_NEWER",
+            "UNITY_ENTITIES_0_12_OR_NEWER"
         );
 
+        Defines.Add(c => GetTargetFramework(c, this) == TargetFramework.Tiny, "NET_DOTS");
+        Defines.Add(c => GetTargetFramework(c, this) == TargetFramework.NetStandard20, "NET_STANDARD_2_0");
+
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSPLAYER32");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 32, "UNITY_DOTSRUNTIME32");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 64, "UNITY_DOTSPLAYER64");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.NativeProgramConfiguration?.ToolChain.Architecture.Bits == 64, "UNITY_DOTSRUNTIME64");
 
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WebGLPlatform, "UNITY_WEBGL");
         Defines.Add(c =>(c as DotsRuntimeCSharpProgramConfiguration)?.Platform is WindowsPlatform, "UNITY_WINDOWS");
@@ -230,6 +217,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         if (hasCpp)
         {
             GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is LinuxPlatform, new SystemLibrary("rt"));
+            GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is LinuxPlatform, new SystemLibrary("atomic"));
             GetOrMakeNativeProgram().Libraries.Add(c => c.Platform is WindowsPlatform, new SystemLibrary("ws2_32.lib"));
             NativeJobsPrebuiltLibrary.AddToNativeProgram(GetOrMakeNativeProgram());
         }
@@ -244,38 +232,40 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             c.CodeGen == CSharpCodeGen.Debug || (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration < DotsConfiguration.Release;
         Defines.Add(isConfigDebug, "DEBUG");
 
-        bool isConfigProfilerEnabled(CSharpProgramConfiguration c) => ((DotsRuntimeCSharpProgramConfiguration)c).EnableProfiler;
+        bool isConfigDevelop(CSharpProgramConfiguration c) => (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration == DotsConfiguration.Develop;
+        Defines.Add(isConfigDevelop, "DEVELOP");
 
-        // The profiler + managed debugging with IL2CPP makes the player really slow. If both are enabled, managed
-        // debugging should be enabled, but the profiler will not be enabled.
-        Defines.Add(c =>
-        {
-            if (IsManagedDebuggingWithIL2CPPEnabled(c))
-            {
-                Errors.PrintWarning("The profiler cannot be enabled with managed debugging and IL2CPP. The profiler will be disabled for this build.");
-                return false;
-            }
-            return isConfigProfilerEnabled(c);
-        }, "ENABLE_PROFILER");
+        Defines.Add(c => IsConfigProfilerEnabled(c, true), "ENABLE_PROFILER");
+
+        // Many systems needs their own DOTS Runtime specific profiler define since they will get scanned by
+        // the hybrid builds/editor, but they will use the DOTS Runtime-specific profiler API.
+        Defines.Add(c => IsConfigProfilerEnabled(c, false), "ENABLE_DOTSRUNTIME_PROFILER");
 
         // Only enable player connection when we need it
         // - To support logging ("debug" builds)
         // - To support profiling
         // - To support il2cpp managed debugging (multicast)
-        Defines.Add(c => isConfigDebug(c) || isConfigProfilerEnabled(c) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_PLAYERCONNECTION");
+        Defines.Add(c => isConfigDebug(c) || IsConfigProfilerEnabled(c, false) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_PLAYERCONNECTION");
 
         // Multicasting
         // - Is a supplement to player connection in non-webgl builds
         // - Is needed for identification in webgl builds, too, if il2cpp managed debugging is enabled
         Defines.Add(c => !((c as DotsRuntimeCSharpProgramConfiguration).Platform is WebGLPlatform) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_MULTICAST");
 
-        Defines.Add(
-            c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.TinyIl2cpp,
-            "UNITY_DOTSPLAYER_IL2CPP");
-        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c), "UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER");
-        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c) && (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger,
-            "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
-        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.Dotnet, "UNITY_DOTSPLAYER_DOTNET");
+        // Special define used mainly for debugging multithread jobs without bursting them
+        Defines.Add(c => !(c as DotsRuntimeCSharpProgramConfiguration).UseBurst && (c as DotsRuntimeCSharpProgramConfiguration).MultiThreadedJobs, "UNITY_DOTSRUNTIME_MULTITHREAD_NOBURST");
+
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.TinyIl2cpp, "UNITY_DOTSPLAYER_IL2CPP"); // deprecated version
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.TinyIl2cpp, "UNITY_DOTSRUNTIME_IL2CPP");
+
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c), "UNITY_DOTSPLAYER_IL2CPP_MANAGED_DEBUGGER"); // deprecated version
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c), "UNITY_DOTSRUNTIME_IL2CPP_MANAGED_DEBUGGER");
+
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c) && (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger, "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER"); // deprecated version
+        Defines.Add(c => IsManagedDebuggingWithIL2CPPEnabled(c) && (c as DotsRuntimeCSharpProgramConfiguration).WaitForManagedDebugger, "UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
+
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.Dotnet, "UNITY_DOTSPLAYER_DOTNET"); // deprecated version
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.ScriptingBackend == ScriptingBackend.Dotnet, "UNITY_DOTSRUNTIME_DOTNET");
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Defines ?? new List<string>());
 
         ProjectFile.RedirectMSBuildBuildTargetToBee = true;
@@ -283,6 +273,39 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         ProjectFile.RootNameSpace = "";
 
         DotsRuntimeCSharpProgramCustomizer.RunAllCustomizersOn(this);
+    }
+
+    public virtual bool IsSupportedFor(CSharpProgramConfiguration config)
+    {
+        if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)
+        {
+            if (IncludePlatforms?.Any(p => p.GetType().IsInstanceOfType(dotsConfig.Platform)) ?? false)
+                return true;
+
+            if (IncludePlatforms?.Any() ?? false)
+                return false;
+
+            if (!ExcludePlatforms?.Any() ?? true)
+                return true;
+
+            return !ExcludePlatforms?.Any(p => p.GetType().IsInstanceOfType(dotsConfig.Platform)) ?? true;
+        }
+
+        return false;
+    }
+
+    public static bool IsConfigProfilerEnabled(CSharpProgramConfiguration c, bool logError)
+    {
+        if (((DotsRuntimeCSharpProgramConfiguration)c).EnableProfiler)
+        {
+            // The profiler + managed debugging with IL2CPP makes the player really slow. If both are enabled, managed
+            // debugging should be enabled, but the profiler will not be enabled.
+            if (!IsManagedDebuggingWithIL2CPPEnabled(c))
+                return true;
+            else if (logError)
+                Errors.PrintWarning("The profiler cannot be enabled with managed debugging and IL2CPP. The profiler will be disabled for this build.");
+        }
+        return false;
     }
 
     private static bool IsManagedDebuggingWithIL2CPPEnabled(CSharpProgramConfiguration c)
@@ -346,7 +369,12 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         np.Defines.Add(c =>
                 ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging &&
                 ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.WaitForManagedDebugger,
-            "UNITY_DOTSPLAYER_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
+            "UNITY_DOTSRUNTIME_IL2CPP_WAIT_FOR_MANAGED_DEBUGGER");
+
+        np.Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableUnityCollectionsChecks, "ENABLE_UNITY_COLLECTIONS_CHECKS");
+
+        // Using ENABLE_PROFILER and not ENABLE_DOTSRUNTIME_PROFILER because native code doesn't call any DOTS Runtime specific API
+        np.Defines.Add(c => IsConfigProfilerEnabled(((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig, false), "ENABLE_PROFILER");
 
         //we don't want to do this for c#, because then burst sees different code from the unbursted path and it's very
         //easy and tempting to go insane this way. but for native, it's fine, since burst
@@ -494,6 +522,10 @@ public enum TargetFramework
     NetStandard20
 }
 
+public interface IPlatformBuildConfig
+{
+}
+
 public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfiguration
 {
     public DotsRuntimeNativeProgramConfiguration NativeProgramConfiguration { get; set; }
@@ -520,6 +552,8 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
 
     public bool UseBurst { get; }
 
+    public IPlatformBuildConfig PlatformBuildConfig { get; set; }
+
     private string _identifier { get; set; }
 
     public DotsRuntimeCSharpProgramConfiguration(
@@ -537,7 +571,6 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         DotsConfiguration dotsConfiguration,
         bool enableProfiler,
         bool useBurst,
-        NativeProgramFormat executableFormat = null,
         IEnumerable<string> defines = null,
         NPath finalOutputDirectory = null)
         : base(
@@ -550,8 +583,7 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
             cppCodegen,
             nativeToolchain,
             identifier,
-            this,
-            executableFormat: executableFormat);
+            this);
         _identifier = identifier;
         EnableUnityCollectionsChecks = enableUnityCollectionsChecks;
         DotsConfiguration = dotsConfiguration;

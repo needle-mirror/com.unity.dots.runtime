@@ -44,13 +44,23 @@ public static class DotsConfigs
                     if (!target.ToolChain.CanBuild)
                         continue;
 
+                    // Need to know this prior to determining need for burst
+                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging",
+                        new[] { DotsConfiguration.Debug }, settingsObject);
+                    if (target.Identifier == "asmjs" || target.Identifier == "wasm")
+                        mdb = false;
+
                     var multithreading = settingsObject.GetBool("EnableMultithreading");
-                    var targetShouldUseBurst = settingsObject.GetBool("EnableBurst");
-                    if (!targetShouldUseBurst && multithreading)
+                    var targetUsesBurst = settingsObject.GetBool("EnableBurst");
+                    if (!targetUsesBurst && multithreading)
                     {
-                        Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
-                            $"specified 'EnableBurst=False', but 'Multithreading=True'. Multithreading requires Burst, therefore enabling Burst.");
-                        targetShouldUseBurst = true;
+                        // This is only really a problem in il2cpp with tiny profile (so it actually works with managed debugging which uses full il2cpp)
+                        if (target.ScriptingBackend == ScriptingBackend.TinyIl2cpp && !mdb)
+                        {
+                            Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
+                                $"specified 'EnableBurst=False', but 'Multithreading=True'. Multithreading requires Burst, therefore enabling Burst.");
+                            targetUsesBurst = true;
+                        }
                     }
 
                     var enableProfiler = ShouldEnableDevelopmentOptionForSetting("EnableProfiler", new [] {DotsConfiguration.Develop}, settingsObject);
@@ -59,18 +69,13 @@ public static class DotsConfigs
                     var enableUnityCollectionsChecks = ShouldEnableDevelopmentOptionForSetting("EnableSafetyChecks",
                         new[] {DotsConfiguration.Debug, DotsConfiguration.Develop}, settingsObject);
 
-                    if (!target.CanUseBurst && targetShouldUseBurst)
+                    if (!target.CanUseBurst && targetUsesBurst)
                     {
                         Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
                             $"specified 'EnableBurst', but target ({target.Identifier}) does not support burst yet. Not using burst.");
-                        targetShouldUseBurst = false;
+                        targetUsesBurst = false;
                     }
 
-                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging",
-                        new[] {DotsConfiguration.Debug}, settingsObject);
-
-                    if (target.Identifier == "asmjs" || target.Identifier == "wasm")
-                        mdb = false;
                     var waitForManagedDebugger = settingsObject.GetBool("WaitForManagedDebugger");
 
                     var rootAssembly = settingsObject.GetString("RootAssembly");
@@ -85,25 +90,51 @@ public static class DotsConfigs
                     if (!PerConfigBuildSettings.ContainsKey(rootAssembly))
                         PerConfigBuildSettings[rootAssembly] = new List<DotsRuntimeCSharpProgramConfiguration>();
 
-                    PerConfigBuildSettings[rootAssembly]
-                        .Add(
-                            new DotsRuntimeCSharpProgramConfiguration(
-                                csharpCodegen: codegen,
-                                cppCodegen: codegen == CSharpCodeGen.Debug ? CodeGen.Debug : CodeGen.Release,
-                                nativeToolchain: target.ToolChain,
-                                scriptingBackend: target.ScriptingBackend,
-                                targetFramework: target.TargetFramework,
-                                identifier: settingsFile.FileNameWithoutExtension,
-                                enableUnityCollectionsChecks: enableUnityCollectionsChecks,
-                                enableManagedDebugging: mdb,
-                                waitForManagedDebugger: waitForManagedDebugger,
-                                multiThreadedJobs: multithreading,
-                                dotsConfiguration: dotsCfg,
-                                enableProfiler: enableProfiler,
-                                useBurst: targetShouldUseBurst,
-                                executableFormat: target.CustomizeExecutableForSettings(settingsObject),
-                                defines: defines,
-                                finalOutputDirectory: finalOutputDir));
+                    var identifier = settingsFile.FileNameWithoutExtension;
+                    do {
+                        PerConfigBuildSettings[rootAssembly]
+                            .Add(
+                                target.CustomizeConfigForSettings(new DotsRuntimeCSharpProgramConfiguration(
+                                    csharpCodegen: codegen,
+                                    cppCodegen: codegen == CSharpCodeGen.Debug ? CodeGen.Debug : CodeGen.Release,
+                                    nativeToolchain: target.ToolChain,
+                                    scriptingBackend: target.ScriptingBackend,
+                                    targetFramework: target.TargetFramework,
+                                    identifier: identifier,
+                                    enableUnityCollectionsChecks: enableUnityCollectionsChecks,
+                                    enableManagedDebugging: mdb,
+                                    waitForManagedDebugger: waitForManagedDebugger,
+                                    multiThreadedJobs: multithreading,
+                                    dotsConfiguration: dotsCfg,
+                                    enableProfiler: enableProfiler,
+                                    useBurst: targetUsesBurst,
+                                    defines: defines,
+                                    finalOutputDirectory: finalOutputDir),
+                                    settingsObject));
+
+                        //We have to introduce the concept of "complementary targets" to accommodate building "fat" binaries on Android,
+                        //for both armv7 and arm64 architectures. This means we have to build two copies of the final binaries, and then do one
+                        //packaging step to package both steps into a single apk. But also, since C# code is allowed to do #if UNITY_DOTSRUNTIME64
+                        //(and indeed we need that ability for the static type registry to generate correct sizes of things), we need to compile
+                        //two sets of c# assemblies, one per architecture, and run il2cpp and burst on each one separately, in order to produce
+                        //these two sets of final binaries.
+                        //For that purpose, we associate a second DotsRuntimeCSharpProgramConfiguration (known as the complementary target) to
+                        //specify the build for the other architecture we wish to compile against, and we do all the building steps up to the final
+                        //packaging step for that config as well as the main one. We skip the final packaging step for the complementary config,
+                        //and make the packaging step for the main config consume both sets of binaries.
+                        //This is a crazy scheme, and we theorize and hope that when we adopt the incremental buildpipeline, we will be able
+                        //to use their concept of per-platform custom graph build steps to make this be more reasonable.
+                        target = target.ComplementaryTarget;
+
+                        //We use "identifier" as a directory name for all intermediate files.
+                        //For complementary target these files will be generated in "target.Identifier" subdirectory.
+                        //So for example in case of arm64 complemenary target a path would be
+                        //"{target.Identifiler}/android_complementary_arm64".
+                        if (target != null)
+                        {
+                            identifier += "/" + target.Identifier;
+                        }
+                    } while (target != null);
                 }
             }
         }
@@ -213,7 +244,7 @@ public static class DotsConfigs
                 cppCodegen: CodeGen.Release,
                 nativeToolchain: target.ToolChain,
                 scriptingBackend: ScriptingBackend.Dotnet,
-                targetFramework: TargetFramework.Tiny,
+                targetFramework: TargetFramework.NetStandard20,
                 identifier: "HostDotNet",
                 enableUnityCollectionsChecks: true,
                 enableManagedDebugging: false,

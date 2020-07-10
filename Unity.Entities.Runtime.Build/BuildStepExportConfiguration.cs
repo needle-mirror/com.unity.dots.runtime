@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
+using Unity.Build.DotsRuntime;
 using Unity.Build.Internals;
 
 namespace Unity.Entities.Runtime.Build
@@ -10,6 +11,7 @@ namespace Unity.Entities.Runtime.Build
     [BuildStep(Description = "Exporting Configuration")]
     sealed class BuildStepExportConfiguration : BuildStepBase
     {
+        static BuildAssemblyCache s_AssemblyCache = new BuildAssemblyCache();
         public override Type[] UsedComponents { get; } =
         {
             typeof(DotsRuntimeBuildProfile),
@@ -18,7 +20,7 @@ namespace Unity.Entities.Runtime.Build
             typeof(OutputBuildDirectory)
         };
 
-        void WriteDebugFile(BuildContext context, BuildManifest manifest, DotsRuntimeBuildProfile profile)
+        void WriteDebugFile(BuildContext context, BuildManifest manifest)
         {
             var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
             var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
@@ -49,7 +51,7 @@ namespace Unity.Entities.Runtime.Build
                     //Verify if an exported type is included in the output, if not print error message
                     foreach (TypeManager.TypeInfo exportedType in typesToWrite)
                     {
-                        if (!rootAssembly.TypeCache.HasType(exportedType.Type))
+                        if (!s_AssemblyCache.HasType(exportedType.Type))
                             Debug.LogError($"The {exportedType.Type.Name} component is defined in the {exportedType.Type.Assembly.GetName().Name} assembly, but that assembly is not referenced by the current build configuration. Either add it as a reference, or ensure that the conversion process that is adding that component does not run.");
                     }
                     debugLines.Add($"::Exported Types (by stable hash)::");
@@ -80,11 +82,14 @@ namespace Unity.Entities.Runtime.Build
             var scenes = context.GetComponentOrDefault<SceneList>();
             var firstScene = scenes.GetScenePathsForBuild().FirstOrDefault();
 
+            s_AssemblyCache.BaseAssemblies = rootAssembly.RootAssembly.asset;
+            s_AssemblyCache.PlatformName = profile.Target.UnityPlatformName;
+
             using (var loadedSceneScope = new LoadedSceneScope(firstScene))
             {
                 var projectScene = loadedSceneScope.ProjectScene;
 
-                using (var tmpWorld = new World(ConfigurationScene.Guid.ToString("N")))
+                using (var tmpWorld = new World(ConfigurationScene.Guid.ToString()))
                 {
                     var em = tmpWorld.EntityManager;
 
@@ -94,11 +99,12 @@ namespace Unity.Entities.Runtime.Build
                     foreach (var type in systems)
                     {
                         ConfigurationSystemBase baseSys = (ConfigurationSystemBase)tmpWorld.GetOrCreateSystem(type);
-                        baseSys.projectScene = projectScene;
-                        baseSys.buildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
+                        baseSys.ProjectScene = projectScene;
+                        baseSys.BuildConfiguration = BuildContextInternals.GetBuildConfiguration(context);
+                        baseSys.AssemblyCache = s_AssemblyCache;
                         configSystemGroup.AddSystemToUpdateList(baseSys);
                     }
-                    configSystemGroup.SortSystemUpdateList();
+                    configSystemGroup.SortSystems();
                     configSystemGroup.Update();
 
                     // Export configuration scene
@@ -109,10 +115,10 @@ namespace Unity.Entities.Runtime.Build
                     WorldExport.WriteWorldToFile(tmpWorld, outputFile);
 
                     // Update manifest
-                    manifest.Add(ConfigurationScene.Guid, ConfigurationScene.Path, outputFile.ToSingleEnumerable());
+                    manifest.Add(new Guid(ConfigurationScene.Guid.ToString()), ConfigurationScene.Name, outputFile.ToSingleEnumerable());
 
                     // Dump debug file
-                    WriteDebugFile(context, manifest, profile);
+                    WriteDebugFile(context, manifest);
                 }
             }
             return context.Success();
