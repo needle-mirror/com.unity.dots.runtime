@@ -1,6 +1,5 @@
-#if DEBUG
-
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 #if !NET_DOTS
 using System.Text.RegularExpressions;
@@ -23,6 +22,7 @@ namespace UnityEngine.TestTools
         internal static bool gotUnexpected = false;
         internal static bool expecting = false;
 
+        [Conditional("DEBUG")]
         internal static void CheckExpected(LogType type, string message)
         {
             bool gotExpected = type == expectType;
@@ -38,6 +38,7 @@ namespace UnityEngine.TestTools
                 expecting = false;
         }
 
+        [Conditional("DEBUG")]
         public static void ExpectReset()
         {
             Expect(LogType.Log, "");
@@ -45,6 +46,7 @@ namespace UnityEngine.TestTools
             gotUnexpected = false;
         }
 
+        [Conditional("DEBUG")]
         public static void Expect(LogType type, string message)
         {
             expectType = type;
@@ -66,7 +68,7 @@ namespace UnityEngine.TestTools
             expecting = true;
         }
 #endif
-
+        [Conditional("DEBUG")]
         public static void NoUnexpectedReceived()
         {
             // "Unexpected" includes expecting something and not getting it
@@ -82,5 +84,3 @@ namespace UnityEngine.TestTools
         }
     }
 }
-
-#endif  // DEBUG

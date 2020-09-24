@@ -1,10 +1,9 @@
 using System;
-using System.Linq;
 using System.IO;
+using System.Linq;
 using Unity.Build;
 using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
-using BuildTarget = Unity.Build.DotsRuntime.BuildTarget;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -14,17 +13,16 @@ namespace Unity.Entities.Runtime.Build
         {
         }
 
-        public override Type[] UsedComponents
-        {
-            get
+        // @TODO: Remove this override entirely, and fix in each BuildTarget instead
+        public override Type[] UsedComponents =>
+            base.UsedComponents.Concat(new[]
             {
-                return base.UsedComponents.Concat(TargetUsedComponents).Distinct().ToArray();
-            }
-        }
+                typeof(GeneralSettings)
+            }).Distinct().ToArray();
 
         public override BuildStepCollection BuildSteps { get; } = new[]
         {
-            typeof(BuildStepExportEntities),
+            typeof(BuildStepExportScenes),
             typeof(BuildStepExportConfiguration),
             typeof(BuildStepGenerateBeeFiles),
             typeof(BuildStepRunBee)
@@ -65,7 +63,6 @@ namespace Unity.Entities.Runtime.Build
                 return BoolResult.False($"{nameof(DotsRuntimeBuildArtifact.OutputTargetFile)} is null.");
             }
 
-            // TODO this should be platform specific
             if (!File.Exists(artifact.OutputTargetFile.FullName) && !Directory.Exists(artifact.OutputTargetFile.FullName))
             {
                 return BoolResult.False($"Output target file '{artifact.OutputTargetFile.FullName}' not found.");

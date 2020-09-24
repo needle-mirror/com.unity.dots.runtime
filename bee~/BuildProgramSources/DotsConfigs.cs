@@ -6,13 +6,20 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Bee.Core;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.CSharpSupport;
+using Bee.NativeProgramSupport;
+using Bee.Tools;
 
 public static class DotsConfigs
 {
     private static Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>> PerConfigBuildSettings =
         new Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>>();
+
+
+    public static void Clear()
+    {
+        PerConfigBuildSettings.Clear();
+    }
 
     public static Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>> MakeConfigs()
     {
@@ -46,10 +53,10 @@ public static class DotsConfigs
                         continue;
 
                     // Need to know this prior to determining need for burst
-                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging",
-                        new[] { DotsConfiguration.Debug }, settingsObject);
-                    if (target.Identifier == "asmjs")
-                        mdb = false;
+                    var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging", new[] { DotsConfiguration.Debug, DotsConfiguration.Develop }, settingsObject);
+                    mdb = target.ValidateManagedDebugging(mdb);
+                    if(mdb && DotsConfigForSettings(settingsObject, out var codeGen) == DotsConfiguration.Debug && target.ScriptingBackend == ScriptingBackend.TinyIl2cpp)
+                        Errors.PrintWarning("Debug builds with managed debugging are very slow. It's recommended to use the Develop configuration instead.");
 
                     var multithreading = settingsObject.GetBool("EnableMultithreading");
                     var targetUsesBurst = settingsObject.GetBool("EnableBurst");
@@ -61,17 +68,15 @@ public static class DotsConfigs
                         bool isWindows = target.ToolChain.Platform is WindowsPlatform;
                         if (!(isFullIl2cpp || isWindows))
                         {
-                            Console.WriteLine($"Warning: BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
+                            Errors.PrintWarning($"BuildConfiguration '{settingsFile.FileNameWithoutExtension}' " +
                                 $"specified 'EnableBurst=False', but 'Multithreading=True'. Multithreading requires Burst, therefore enabling Burst.");
                             targetUsesBurst = true;
                         }
                     }
 
-                    var enableProfiler = ShouldEnableDevelopmentOptionForSetting("EnableProfiler", new [] {DotsConfiguration.Develop}, settingsObject);
-
                     var dotsCfg = DotsConfigForSettings(settingsObject, out var codegen);
-                    var enableUnityCollectionsChecks = ShouldEnableDevelopmentOptionForSetting("EnableSafetyChecks",
-                        new[] {DotsConfiguration.Debug, DotsConfiguration.Develop}, settingsObject);
+                    var enableProfiler = ShouldEnableDevelopmentOptionForSetting("EnableProfiler", new [] {DotsConfiguration.Develop}, settingsObject);
+                    var enableUnityCollectionsChecks = ShouldEnableDevelopmentOptionForSetting("EnableSafetyChecks", new[] {DotsConfiguration.Debug, DotsConfiguration.Develop}, settingsObject);
 
                     if (!target.CanUseBurst && targetUsesBurst)
                     {

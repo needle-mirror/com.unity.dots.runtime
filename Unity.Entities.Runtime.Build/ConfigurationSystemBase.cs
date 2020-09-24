@@ -1,3 +1,4 @@
+using System;
 using Unity.Build;
 using UnityEngine.SceneManagement;
 
@@ -14,8 +15,9 @@ namespace Unity.Entities.Runtime.Build
     /// </summary>
     public abstract partial class ConfigurationSystemBase : SystemBase
     {
-        public Scene ProjectScene;
-        public BuildConfiguration BuildConfiguration;
+        public virtual Type[] UsedComponents { get; } = Array.Empty<Type>();
+        public BuildContext BuildContext;
         public BuildAssemblyCache AssemblyCache;
+        public string OutputDir;
     }
 }

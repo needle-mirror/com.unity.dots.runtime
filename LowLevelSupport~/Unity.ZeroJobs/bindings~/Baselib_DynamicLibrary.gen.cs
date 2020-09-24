@@ -18,7 +18,7 @@ namespace Unity.Baselib.LowLevel
         /// <summary>Open a dynamic library.</summary>
         /// <remarks>
         /// Dynamic libraries are reference counted, so if the same library is loaded again
-        /// with Baselib_DynamicLibrary_Open, the same file handle is returned.
+        /// with Baselib_DynamicLibrary_OpenUtf8/Baselib_DynamicLibrary_OpenUtf16, the same file handle is returned.
         /// It is also possible to load two different libraries containing two different functions that have the same name.
         ///
         /// Please note that additional error information should be retrieved via error state explain and be presented to the end user.
@@ -26,14 +26,45 @@ namespace Unity.Baselib.LowLevel
         ///
         /// Possible error codes:
         /// - Baselib_ErrorCode_FailedToOpenDynamicLibrary: Unable to open requested dynamic library.
+        /// - Baselib_ErrorCode_NotSupported: This feature is not supported on the current platform.
         /// </remarks>
-        /// <param name="pathname">
+        /// <param name="pathnameUtf8">
         /// Library file to be opened.
         /// If relative pathname is provided, platform library search rules are applied (if any).
         /// If nullptr is passed, Baselib_ErrorCode_InvalidArgument will be risen.
         /// </param>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern Baselib_DynamicLibrary_Handle Baselib_DynamicLibrary_Open(byte* pathname, Baselib_ErrorState* errorState);
+        public static extern Baselib_DynamicLibrary_Handle Baselib_DynamicLibrary_OpenUtf8(byte* pathnameUtf8, Baselib_ErrorState* errorState);
+        /// <summary>
+        /// Open a dynamic library.
+        /// Functionally identical to Baselib_DynamicLibrary_OpenUtf8, but accepts UTF-16 path instead.
+        /// </summary>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern Baselib_DynamicLibrary_Handle Baselib_DynamicLibrary_OpenUtf16(char* pathnameUtf16, Baselib_ErrorState* errorState);
+        /// <summary>
+        /// Return a handle that can be used to query functions in the program's scope.
+        /// Must be closed via Baselib_DynamicLibrary_Close.
+        /// </summary>
+        /// <remarks>
+        /// Possible error codes:
+        /// - Baselib_ErrorCode_NotSupported: This feature is not supported on the current platform.
+        /// </remarks>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern Baselib_DynamicLibrary_Handle Baselib_DynamicLibrary_OpenProgramHandle(Baselib_ErrorState* errorState);
+        /// <summary>Convert native handle into baselib handle without changing the dynamic library ref counter.</summary>
+        /// <remarks>
+        /// Provided handle should be closed either via Baselib_DynamicLibrary_Close or other means.
+        /// The caller is responsible for closing the handle once done with it.
+        /// Other corresponding resources should be closed by other means.
+        /// </remarks>
+        /// <param name="handle">Platform defined native handle.</param>
+        /// <param name="type">
+        /// Platform defined native handle type from Baselib_DynamicLibrary_NativeHandleType enum.
+        /// If unsupported type is passed, will return Baselib_DynamicLibrary_Handle_Invalid.
+        /// </param>
+        /// <returns>Baselib_DynamicLibrary_Handle handle.</returns>
+        [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern Baselib_DynamicLibrary_Handle Baselib_DynamicLibrary_FromNativeHandle(UInt64 handle, UInt32 type, Baselib_ErrorState* errorState);
         /// <summary>Lookup a function in a dynamic library.</summary>
         /// <remarks>
         /// Possible error codes:

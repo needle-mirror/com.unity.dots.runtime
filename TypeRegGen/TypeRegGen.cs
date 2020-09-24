@@ -142,6 +142,9 @@ namespace Unity.ZeroPlayer
         {
             m_ArchBits = 64;
             m_AssemblyDefs = new List<AssemblyDefinition>();
+            m_CustomBootstraps = new List<TypeDefinition>();
+            m_AssemblyTypeRegistries = new List<TypeDefinition>();
+            m_EarlyInitMethods = new List<MethodDefinition>();
         }
 
         public void GenerateTypeRegistry(string[] args)
@@ -151,15 +154,17 @@ namespace Unity.ZeroPlayer
 
             ProcessArgs(args, assemblyResolver, symbolReaderProvider);
 
-            // This call can be removed once IL2CPP supports module initializers
+            CollectReflectionInfo();
+
             InjectRegisterAllAssemblyRegistries();
+            InjectEarlyInitMethods();
+            InjectCustomBootstrap();
 
             m_interfaceGen = new InterfaceGen(m_AssemblyDefs, m_BurstEnabled, m_MultithreadEnabled);
             m_interfaceGen.AddMethods();
             m_interfaceGen.PatchJobsCode();
             m_interfaceGen.InjectBurstInfrastructureMethods();
-
-            ScanAndInjectCustomBootstrap();
+            m_interfaceGen.PatchJobDebuggerStringTable();
 
             WriteModifiedAssemblies(in m_interfaceGen.TypesToMakePublic);
             //SaveDebugMeta(typeGenInfoList, m_Systems, m_interfaceGen.JobDescList);
@@ -167,6 +172,48 @@ namespace Unity.ZeroPlayer
             assemblyResolver.Dispose();
             m_MscorlibAssembly.Dispose();
             m_EntityAssembly.Dispose();
+            m_ZeroJobsAssembly.Dispose();
+        }
+
+        void CollectReflectionInfo()
+        {
+            const string CustomBootstrapName = "Unity.Entities.ICustomBootstrap";
+
+            foreach (AssemblyDefinition asm in m_AssemblyDefs)
+            {
+                foreach (TypeDefinition t in asm.MainModule.GetAllTypes())
+                {
+                    // ICustomBootstrap criteria
+                    if (!t.IsPrimitive && DoesTypeInheritInterface(t, CustomBootstrapName))
+                    {
+                        m_CustomBootstraps.Add(t);
+                    }
+
+                    // AssemblyTypeRegistry criteria
+                    if (t.IsClass && t.FullName == "Unity.Entities.CodeGeneratedRegistry.AssemblyTypeRegistry")
+                    {
+                        m_AssemblyTypeRegistries.Add(t);
+                    }
+
+                    // Unmanaged Systems early initialization criteria
+                    if(t.FullName.StartsWith("__UnmanagedPostProcessorOutput__"))
+                    {
+                        foreach (var m in t.Methods)
+                        {
+                            if (!m.IsStatic || m.ReturnType.MetadataType != MetadataType.Void)
+                                continue;
+
+                            if (m.Name == "EarlyInit")
+                            {
+                                ForceTypeAsPublic(m.DeclaringType);
+                                m.IsPublic = true;
+
+                                m_EarlyInitMethods.Add(m);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         void InjectRegisterAllAssemblyRegistries()
@@ -178,25 +225,10 @@ namespace Unity.ZeroPlayer
             var il = registerFn.Body.GetILProcessor();
             registerFn.Body.Instructions.Clear();
 
-            var asmRegTypeList = new List<TypeDefinition>();
-            foreach (var asm in m_AssemblyDefs)
+            PushNewArray(ref il, registerAssemblyType, m_AssemblyTypeRegistries.Count);
+            for (int i = 0; i < m_AssemblyTypeRegistries.Count; ++i)
             {
-                if (asm.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == "Unity.Entities") == null && asm.Name.Name != "Unity.Entities")
-                    continue;
-
-                foreach (var type in asm.MainModule.GetAllTypes().Where(t => t.IsClass))
-                {
-                    if (type.FullName == "Unity.Entities.CodeGeneratedRegistry.AssemblyTypeRegistry")
-                    {
-                        asmRegTypeList.Add(type);
-                    }
-                }
-            }
-
-            PushNewArray(ref il, registerAssemblyType, asmRegTypeList.Count);
-            for (int i = 0; i < asmRegTypeList.Count; ++i)
-            {
-                var type = asmRegTypeList[i];
+                var type = m_AssemblyTypeRegistries[i];
                 var field = m_EntityAssembly.MainModule.ImportReference(type.Fields.First(f => f.Name == "TypeRegistry"));
                 PushNewArrayElement(ref il, i);
                 il.Emit(OpCodes.Ldsfld, field);
@@ -207,49 +239,47 @@ namespace Unity.ZeroPlayer
             il.Emit(OpCodes.Ret);
         }
 
-        public void ScanAndInjectCustomBootstrap()
+        void InjectEarlyInitMethods()
         {
-            const string CustomBootstrapName = "Unity.Entities.ICustomBootstrap";
+            var dotsruntimeTypeDef = m_ZeroJobsAssembly.MainModule.GetType("Unity.Core.DotsRuntime");
+            var initMethod = dotsruntimeTypeDef.GetMethods().First(m => m.Name == "InvokeEarlyInitMethods");
+            var il = initMethod.Body.GetILProcessor();
+            initMethod.Body.Instructions.Clear();
 
-            var customBootstraps = new List<TypeDefinition>();
-            foreach (AssemblyDefinition asm in m_AssemblyDefs)
+            foreach(var m in m_EarlyInitMethods)
             {
-                if (asm == m_EntityAssembly)
-                    continue;
-
-                foreach (TypeDefinition t in asm.MainModule.GetAllTypes())
-                {
-                    if (!t.IsPrimitive && DoesTypeInheritInterface(t, CustomBootstrapName))
-                    {
-                        customBootstraps.Add(t);
-                    }
-                }
+                il.Emit(OpCodes.Call, m_ZeroJobsAssembly.MainModule.ImportReference(m));
             }
 
+            il.Emit(OpCodes.Ret);
+        }
+
+        public void InjectCustomBootstrap()
+        {
             var defaultWorldInitDef = m_EntityAssembly.MainModule.GetType("Unity.Entities.DefaultWorldInitialization");
             var getBootstrapFn = defaultWorldInitDef.Methods.First(m => m.Name == "CreateBootStrap");
             getBootstrapFn.Body.Instructions.Clear();
             var il = getBootstrapFn.Body.GetILProcessor();
 
-            if (customBootstraps.Count == 0)
+            if (m_CustomBootstraps.Count == 0)
                 il.Emit(OpCodes.Ldnull);
             else
             {
-                TypeDefinition bootstrap = customBootstraps[0];
+                TypeDefinition bootstrap = m_CustomBootstraps[0];
                 // Hybrid has the odd logic of that if there is more than one custombootstrap, choose the one that
                 // is most specialized. (e.g Type A, or Type B : A, choose B since it further specializes/extends A)
                 // Of course this totally breaks down if you have A, B : A, C : A but we'll just choose the first
                 // one we find since that is what Hybrid does as well until we can change how Hybrid works.
-                if (customBootstraps.Count > 1)
+                if (m_CustomBootstraps.Count > 1)
                 {
                     int bootstrapIndex = 0;
                     int maxDepth = 0;
-                    for (int i = 0; i < customBootstraps.Count; ++i)
+                    for (int i = 0; i < m_CustomBootstraps.Count; ++i)
                     {
                         // Note this isn't 100% correct since we aren't checking the depth of the specialization for
                         // types underneath the type implementing ICustomBootstrap. This detail is ignored for now as
                         // it's uncommon we will have more than one ICustomBootstrap anyway.
-                        var t = customBootstraps[i];
+                        var t = m_CustomBootstraps[i];
                         int depth = 1;
                         while (t.BaseType != null)
                         {
@@ -261,7 +291,7 @@ namespace Unity.ZeroPlayer
                             bootstrapIndex = i;
                     }
 
-                    bootstrap = customBootstraps[bootstrapIndex];
+                    bootstrap = m_CustomBootstraps[bootstrapIndex];
                 }
 
                 ForceTypeAsPublic(bootstrap);
@@ -328,8 +358,9 @@ namespace Unity.ZeroPlayer
                 assemblyResolver.Add(asm);
             }
 
-            // Entity is special so we maintain a specific reference to it so we can ensure it is always registed as typeIndex 1 (0 being reserved for null)
+            // We need a few special dlls specifically for injecting into
             m_EntityAssembly = m_AssemblyDefs.First(asm => asm.Name.Name == "Unity.Entities");
+            m_ZeroJobsAssembly = m_AssemblyDefs.First(asm => asm.Name.Name == "Unity.ZeroJobs");
 
             m_MscorlibAssembly = m_AssemblyDefs.FirstOrDefault(asm => asm.Name.Name == "mscorlib");
             if (m_MscorlibAssembly == null)
@@ -419,31 +450,9 @@ namespace Unity.ZeroPlayer
                 }
 
                 var outPath = Path.Combine(m_OutputDir, asmFileName);
+                var writerParams = new WriterParameters() { WriteSymbols = asm.MainModule.HasSymbols, SymbolWriterProvider = new PortablePdbWriterProvider() };
 
-                var writerParams = new WriterParameters() {WriteSymbols = asm.MainModule.HasSymbols};
-
-                try
-                {
-                    asm.MainModule.Write(outPath, writerParams);
-                }
-                catch (DllNotFoundException e)
-                {
-                    /*
-                     * on mac, cecil can't find ole32.dll, so just copy it.
-                     */
-                    if (!e.Message.Contains("ole32.dll"))
-                        throw e;
-                    File.Copy(asm.MainModule.FileName, outPath, true);
-                    if (asm.MainModule.HasSymbols)
-                    {
-                        Console.WriteLine(
-                            $"Warning: TypeRegGen could not write new '{asm.MainModule.Name}'. Copying original instead.");
-                        File.Copy(
-                            Path.ChangeExtension(asm.MainModule.FileName, "pdb"),
-                            Path.ChangeExtension(outPath, "pdb"),
-                            true);
-                    }
-                }
+                asm.MainModule.Write(outPath, writerParams);
             }
         }
 
@@ -679,7 +688,12 @@ namespace Unity.ZeroPlayer
 
         AssemblyDefinition m_MscorlibAssembly;
         AssemblyDefinition m_EntityAssembly;
+        AssemblyDefinition m_ZeroJobsAssembly;
         List<AssemblyDefinition> m_AssemblyDefs;
+
+        List<TypeDefinition> m_CustomBootstraps;
+        List<TypeDefinition> m_AssemblyTypeRegistries;
+        List<MethodDefinition> m_EarlyInitMethods;
         bool m_WriteOutMscorlib = true;
     }
 }

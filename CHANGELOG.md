@@ -4,7 +4,38 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## [0.29.0] - 2020-07-10
+## [0.31.0] - 2020-09-24
+
+### Added
+
+* Per-thread Allocator.Temp scoping.
+
+### Fixed
+
+* "Generate Solution Window" will no longer generate a solution with build configurations that may conflict with existing test program build configurations.
+
+## [0.30.0] - 2020-08-26
+
+### Added
+
+* Added support for `ISystemBase` system types.
+* Logging includes log type information for editor player connection logs
+* Logging includes stack trace
+* Unity.Tiny.IO and Unity.Tiny.Thread.Native AssemblyDefinitions have been moved from the `com.unity.tiny` package into the `com.unity.dots.runtime` package.
+
+### Changed
+
+* Upgraded Burst to 1.4.0-preview.4 version.
+* Managed Debugging's "Use Build Configuration" option now enabled Managed Debugging when build in `debug` or `develop` configurations. It is recommended to use the `develop` configuration when using the managed debugger (as debug builds are _very_ slow)
+*Moved IL2CPPSettings and BuildSettingsToggle to Unity.Build.DotsRuntime
+
+### Fixed
+
+* WebGL log spam if player connection can't be established
+* Multithreaded builds calling ScheduleBatch and ScheduleJobParallelFor can now be Burst compiled. Previously Burst would fail due to passing/returning structs to/from native functions.
+
+
+## [0.29.0] - 2020-08-04
 
 ### Added
 
@@ -43,6 +74,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Added
 
 * Support for sources common for BuildProgram and for Editor assemblies (these sources should be in "bee" folders instead of "bee~" for BuildProgram specific sources)
+* Job Debugger with 1:1 parity to Hybrid DOTS Job Debugger
 
 ### Changed
 

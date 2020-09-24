@@ -98,6 +98,32 @@ namespace Unity.IO.LowLevel.Unsafe
         }
     }
 
+#if !UNITY_SINGLETHREADED_JOBS
+    struct ReadJob : IJob
+    {
+        public AsyncOp m_Op;
+
+        public void Execute()
+        {
+            AsyncOp.Status status = AsyncOp.Status.NotStarted;
+            while((status = m_Op.GetStatus()) <= AsyncOp.Status.InProgress)
+                Baselib.LowLevel.Binding.Baselib_Thread_YieldExecution();
+
+            if (status == AsyncOp.Status.Failure)
+            {
+                switch (m_Op.GetErrorStatus())
+                {
+                    case AsyncOp.ErrorStatus.FileNotFound:
+                        throw new ArgumentException("Could not find specified file when reading scene in ReadJob");
+                    case AsyncOp.ErrorStatus.Unknown:
+                    default:
+                        throw new ArgumentException("Unknown error trying to read scene during ReadJob");
+                }
+            }
+        }
+    }
+#endif
+
     internal static class AsyncReadManager
     {
         /// <summary>
@@ -124,11 +150,16 @@ namespace Unity.IO.LowLevel.Unsafe
 
             // Always provide a new buffer for reads as the data will be compressed and needs to be decoded into the
             // passed in buffer here.
-            {
-                asyncOp = IOService.RequestAsyncRead(filename);
-            }
+            asyncOp = IOService.RequestAsyncRead(filename);
 
             handle.mAsyncOp = asyncOp;
+
+#if !UNITY_SINGLETHREADED_JOBS
+            handle.mJobHandle = new ReadJob()
+            {
+                m_Op = handle.mAsyncOp
+            }.Schedule();
+#endif
 
             return handle;
         }

@@ -27,6 +27,9 @@ using namespace Unity::LowLevel;
 #define CALLEXPORT
 #endif
 
+
+extern "C" void SetScopeFuncs(void (*enterScopeFunc)(), void (*exitScopeFunc)());
+
 // SSE requires 16 bytes alignment
 // AVX 256 is 32 bytes
 // AVX 512 is 64 bytes
@@ -42,8 +45,7 @@ static const int ARCH_ALIGNMENT = 8;
 
 static int64_t heapUsage[(int)Allocator::NumAllocators] = { 0 };   // Debugging, multithread safe
 
-static BumpAllocator sBumpAlloc;
-static baselib::Lock sBumpAllocMutex;
+static thread_local BumpAllocator sBumpAlloc;
 
 static inline int checkAlignment(int alignOf)
 {
@@ -110,9 +112,13 @@ static void* checkDeallocation(void* userPtr, bool willFreeMem, Allocator alloca
 
     GuardHeader* head = (GuardHeader*)userPtr - 1;
 
-    int64_t old;
-    int64_t paddedSizeNeg = -calcPaddedSize(head->data.size, head->data.offset);
-    Baselib_atomic_fetch_add_64_relaxed_v(&heapUsage[(int)allocatorType], &paddedSizeNeg, &old);
+    // Temp allocations are freed by scope
+    if (allocatorType != Allocator::Temp)
+    {
+        int64_t old;
+        int64_t paddedSizeNeg = -calcPaddedSize(head->data.size, head->data.offset);
+        Baselib_atomic_fetch_add_64_relaxed_v(&heapUsage[(int)allocatorType], &paddedSizeNeg, &old);
+    }
 
     return (void*)((uint8_t*)userPtr - head->data.offset);
 #else
@@ -121,7 +127,7 @@ static void* checkDeallocation(void* userPtr, bool willFreeMem, Allocator alloca
 #endif
 }
 
-extern "C" 
+extern "C"
 {
 
 DOEXPORT
@@ -137,18 +143,15 @@ void* CALLEXPORT unsafeutility_malloc(int64_t size, int alignOf, Allocator alloc
     int64_t paddedSize = calcPaddedSize(size, headerSize);
 
     void* memBase;
-    void* memUser;
     if (allocatorType == Allocator::Temp)
-    {
-        BaselibLock lock(sBumpAllocMutex);
         memBase = sBumpAlloc.alloc((int)paddedSize, alignOf);
-        memUser = (void*)((uint8_t*)memBase + headerSize);
-    }
     else
-    {
         memBase = Baselib_Memory_AlignedAllocate(paddedSize, alignOf);
-        memUser = (void*)((uint8_t*)memBase + headerSize);
-    }
+
+    if (!memBase)
+        return nullptr;
+
+    void* memUser = (void*)((uint8_t*)memBase + headerSize);
 
     checkAllocation(memUser, size, headerSize, true, allocatorType);
 
@@ -232,11 +235,64 @@ void CALLEXPORT unsafeutility_memclear(void* destination, int64_t size)
 }
 
 DOEXPORT
-void CALLEXPORT unsafeutility_freetemp()
+void CALLEXPORT unsafeutility_temp_enterscope()
 {
-    BaselibLock lock(sBumpAllocMutex);
-    sBumpAlloc.reset();
-    heapUsage[(int)Allocator::Temp] = 0;
+    sBumpAlloc.pushRewindPoint();
+}
+
+DOEXPORT
+void CALLEXPORT unsafeutility_temp_exitscope()
+{
+    int64_t currTotalUsed = (int64_t)sBumpAlloc.getTotalUsed();
+    sBumpAlloc.rewind();
+    int64_t rewindTotalUsed = (int64_t)sBumpAlloc.getTotalUsed();
+    int64_t negTotalUsed = -(currTotalUsed - rewindTotalUsed);
+
+    int64_t old;
+    Baselib_atomic_fetch_add_64_relaxed_v(&heapUsage[(int)Allocator::Temp], &negTotalUsed, &old);
+
+    if (!sBumpAlloc.hasRewind())
+        sBumpAlloc.reset();
+}
+
+namespace
+{
+    class Init
+    {
+    public:
+        Init() { SetScopeFuncs(unsafeutility_temp_enterscope, unsafeutility_temp_exitscope); }
+    };
+    Init init;
+}
+
+DOEXPORT
+void* CALLEXPORT unsafeutility_temp_getscopeuser()
+{
+    return sBumpAlloc.getRewindUser();
+}
+
+DOEXPORT
+void CALLEXPORT unsafeutility_temp_setscopeuser(void* user)
+{
+    sBumpAlloc.setRewindUser(user);
+}
+
+DOEXPORT
+void CALLEXPORT unsafeutility_temp_free()
+{
+    sBumpAlloc.free();
+}
+
+DOEXPORT
+int32_t CALLEXPORT unsafeutility_temp_getlocalused()
+{
+    return sBumpAlloc.getTotalUsed();
+}
+
+DOEXPORT
+int32_t CALLEXPORT unsafeutility_temp_getlocalcapacity()
+{
+    return (int32_t) sBumpAlloc.getCapacity();
 }
 
 #define UNITY_MEMCPY memcpy
@@ -250,7 +306,7 @@ void CALLEXPORT unsafeutility_memcpy(void* destination, void* source, int64_t co
 
 DOEXPORT
 void CALLEXPORT unsafeutility_memcpystride(void* destination_, int destinationStride, void* source_, int sourceStride, int elementSize, int64_t count)
-{   
+{
     UInt8* destination = (UInt8*)destination_;
     UInt8* source = (UInt8*)source_;
     if (elementSize == destinationStride && elementSize == sourceStride)
@@ -278,7 +334,7 @@ DOEXPORT
 void CALLEXPORT unsafeutility_memcpyreplicate(void* dst, void* src, int size, int count)
 {
     uint8_t* dstbytes = (uint8_t*)dst;
-    // TODO something smarter	
+    // TODO something smarter
     for (int i = 0; i < count; ++i)
     {
         memcpy(dstbytes, src, size);
@@ -319,20 +375,6 @@ void CALLEXPORT unsafeutility_call_pi(void* f, void* data, int i)
     MEM_ASSERT(f);
     Call_pi func = (Call_pi)f;
     func(data, i);
-}
-
-int inJob = 0;
-
-DOEXPORT
-int CALLEXPORT unsafeutility_get_in_job()
-{
-    return inJob;
-}
-
-DOEXPORT
-void CALLEXPORT unsafeutility_set_in_job(int v)
-{
-    inJob = v;
 }
 
 } // extern "C"

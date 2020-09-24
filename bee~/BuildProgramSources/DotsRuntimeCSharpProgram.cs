@@ -9,14 +9,12 @@ using Bee;
 using Bee.Core;
 using Bee.CSharpSupport;
 using Bee.DotNet;
-using Bee.NativeProgramSupport.Building;
 using Bee.Toolchain.Emscripten;
 using Bee.Toolchain.Xcode;
 using Bee.VisualStudioSolution;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildSystem.NativeProgramSupport;
-using Unity.BuildTools;
+using Bee.NativeProgramSupport;
+using Bee.Tools;
 
 public enum DotsConfiguration
 {
@@ -47,16 +45,16 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
     // Unilaterally enable warnings as errors for any assembly which matches one of the following patterns
     static readonly string[] EnableWarningsAsErrorsPatterns =
     {
-        @"Unity\..*" // Force Warnings as Errors for all Unity asmdefs
+        @"Unity\..*",       // Force warningsaserrors for all unity asmdefs
+        @"lib_unity_.*"     // Force warningsaserrors for all unity native libs
     };
 
     // Explicitly prevent enabling warnings as errors for any assembly matched by this list
     static readonly string[] EnableWarningsAsErrorsExclusionsRegex =
     {
-        @"\.Tests$", // Exclude all tests from having Warnings as Errors
-        @"Unity.Physics" // Currently generates warnings
+        @"\.Tests$",        // Exclude all tests from having warningsaserrors
+        @"Unity.Physics"    // Currently generates warnings
     };
-
 
     public DotsRuntimeCSharpProgram(NPath mainSourcePath,
         IEnumerable<NPath> extraSourcePaths = null,
@@ -129,9 +127,12 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.Platform is AndroidPlatform, "UNITY_ANDROID");
         Defines.Add(c => !((DotsRuntimeCSharpProgramConfiguration) c).MultiThreadedJobs, "UNITY_SINGLETHREADED_JOBS");
 
+        // Adds stack traces to mallocs until we get a better system for memory leaks
+        //Defines.Add("UNITY_DOTSRUNTIME_TRACEMALLOCS");
+
         CopyReferencesNextToTarget = false;
 
-        SetWarningsAsErrors(name);
+        WarningsAsErrors = ShouldEnableWarningsAsErrors(name);
 
         foreach (var sourcePath in AllSourcePaths)
         {
@@ -198,6 +199,16 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
                         jsFiles.Select(jsFile => new PostJsLibrary(jsFile)));
             }
 
+            // .jslib files in asmdef dir, like Unity
+            var jslibFiles = sourcePath.Files("*.jslib", true);
+            if (jslibFiles.Any())
+            {
+                ProjectFile.AdditionalFiles.AddRange(jslibFiles);
+                GetOrMakeNativeProgram()
+                    .Libraries.Add(c => c.Platform is WebGLPlatform,
+                        jslibFiles.Select(jsFile => new JavascriptLibrary(jsFile)));
+            }
+
             if (beeFolder.DirectoryExists())
                 ProjectFile.AdditionalFiles.AddRange(beeFolder.Files("*.cs"));
 
@@ -239,17 +250,17 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         bool isConfigDevelop(CSharpProgramConfiguration c) => (c as DotsRuntimeCSharpProgramConfiguration)?.DotsConfiguration == DotsConfiguration.Develop;
         Defines.Add(isConfigDevelop, "DEVELOP");
 
-        Defines.Add(c => IsConfigProfilerEnabled(c, true), "ENABLE_PROFILER");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.EnableProfiler == true, "ENABLE_PROFILER");
 
         // Many systems needs their own DOTS Runtime specific profiler define since they will get scanned by
         // the hybrid builds/editor, but they will use the DOTS Runtime-specific profiler API.
-        Defines.Add(c => IsConfigProfilerEnabled(c, false), "ENABLE_DOTSRUNTIME_PROFILER");
+        Defines.Add(c => (c as DotsRuntimeCSharpProgramConfiguration)?.EnableProfiler == true, "ENABLE_DOTSRUNTIME_PROFILER");
 
         // Only enable player connection when we need it
         // - To support logging ("debug" builds)
         // - To support profiling
         // - To support il2cpp managed debugging (multicast)
-        Defines.Add(c => isConfigDebug(c) || IsConfigProfilerEnabled(c, false) || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_PLAYERCONNECTION");
+        Defines.Add(c => isConfigDebug(c) || (c as DotsRuntimeCSharpProgramConfiguration)?.EnableProfiler == true || IsManagedDebuggingWithIL2CPPEnabled(c), "ENABLE_PLAYERCONNECTION");
 
         // Multicasting
         // - Is a supplement to player connection in non-webgl builds
@@ -295,20 +306,6 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
             return !ExcludePlatforms?.Any(p => p.GetType().IsInstanceOfType(dotsConfig.Platform)) ?? true;
         }
 
-        return false;
-    }
-
-    public static bool IsConfigProfilerEnabled(CSharpProgramConfiguration c, bool logError)
-    {
-        if (((DotsRuntimeCSharpProgramConfiguration)c).EnableProfiler)
-        {
-            // The profiler + managed debugging with IL2CPP makes the player really slow. If both are enabled, managed
-            // debugging should be enabled, but the profiler will not be enabled.
-            if (!IsManagedDebuggingWithIL2CPPEnabled(c))
-                return true;
-            else if (logError)
-                Errors.PrintWarning("The profiler cannot be enabled with managed debugging and IL2CPP. The profiler will be disabled for this build.");
-        }
         return false;
     }
 
@@ -359,7 +356,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         np.IncludeDirectories.Add(BuildProgram.BeeRootValue.Combine("cppsupport/include"));
 
         //lets always add a dummy cpp file, in case this np is only used to carry other libraries
-        np.Sources.Add(BuildProgram.BeeRootValue.Combine("cppsupport/dummy.cpp"));
+        np.Sources.Add(BuildProgram.BeeRootValue.Combine("cppsupport/dummy.cpp").ResolveWithFileSystem());
 
         np.Defines.Add(c => c.Platform is WebGLPlatform, "UNITY_WEBGL=1");
         np.Defines.Add(c => c.Platform is WindowsPlatform, "UNITY_WINDOWS=1");
@@ -378,7 +375,7 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         np.Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableUnityCollectionsChecks, "ENABLE_UNITY_COLLECTIONS_CHECKS");
 
         // Using ENABLE_PROFILER and not ENABLE_DOTSRUNTIME_PROFILER because native code doesn't call any DOTS Runtime specific API
-        np.Defines.Add(c => IsConfigProfilerEnabled(((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig, false), "ENABLE_PROFILER");
+        np.Defines.Add(c => (c as DotsRuntimeNativeProgramConfiguration)?.CSharpConfig.EnableProfiler == true, "ENABLE_PROFILER");
 
         //we don't want to do this for c#, because then burst sees different code from the unbursted path and it's very
         //easy and tempting to go insane this way. but for native, it's fine, since burst
@@ -393,6 +390,8 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         np.StaticLinkerSettings()
             .Add(c => c.ToolChain is EmscriptenToolchain && ((DotsRuntimeNativeProgramConfiguration) c).CSharpConfig.EnableManagedDebugging,
                 s => s.WithCustomFlags_workaround(new[] {"-s", "USE_PTHREADS=1"}));
+
+        np.CompilerSettings().Add(c => c.WithWarningsAsErrors(ShouldEnableWarningsAsErrors(libname)));
     }
 
     protected virtual TargetFramework GetTargetFramework(CSharpProgramConfiguration config, DotsRuntimeCSharpProgram program)
@@ -499,26 +498,24 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         }
     }
 
-    void SetWarningsAsErrors(string assemblyName)
+    static bool ShouldEnableWarningsAsErrors(string assemblyName)
     {
-        WarningsAsErrors = false;
 
         foreach (var pattern in EnableWarningsAsErrorsExclusionsRegex)
         {
             var regex = new Regex(pattern);
             if (regex.IsMatch(assemblyName))
-                return;
+                return false;
         }
 
         foreach (var pattern in EnableWarningsAsErrorsPatterns)
         {
             var regex = new Regex(pattern);
             if (regex.IsMatch(assemblyName))
-            {
-                WarningsAsErrors = true;
-                return;
-            }
+                return true;
         }
+
+        return false;
     }
 }
 
@@ -571,7 +568,6 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
     public DotsRuntimeCSharpProgramConfiguration(
         CSharpCodeGen csharpCodegen,
         CodeGen cppCodegen,
-        //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
         ToolChain nativeToolchain,
         ScriptingBackend scriptingBackend,
         TargetFramework targetFramework,
@@ -587,7 +583,7 @@ public sealed class DotsRuntimeCSharpProgramConfiguration : CSharpProgramConfigu
         NPath finalOutputDirectory = null)
         : base(
             csharpCodegen,
-            DownloadableCsc.Csc72,
+            null,
             DebugFormat.PortablePdb,
             nativeToolchain.Architecture is IntelArchitecture ? nativeToolchain.Architecture : null)
     {

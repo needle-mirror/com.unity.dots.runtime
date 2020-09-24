@@ -4,8 +4,7 @@ using System.Net;
 using Bee.DotNet;
 using Bee.Toolchain.Extension;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.CSharpSupport;
 
 public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
 {
@@ -82,6 +81,7 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities")));
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.Core")));
             References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Tiny.UnityInstance")));
+            References.Add(BuildProgram.GetOrMakeDotsRuntimeCSharpProgramFor(AsmDefConfigFile.AsmDefDescriptionFor("Unity.Collections")));
         }
         else if(IsILPostProcessorAssembly)
         {

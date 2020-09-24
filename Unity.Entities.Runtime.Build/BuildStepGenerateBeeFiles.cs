@@ -16,6 +16,8 @@ namespace Unity.Entities.Runtime.Build
         {
             typeof(DotsRuntimeBuildProfile),
             typeof(DotsRuntimeRootAssembly),
+            typeof(DotsRuntimeBurstSettings),
+            typeof(DotsRuntimeScriptingSettings),
             typeof(OutputBuildDirectory),
             typeof(IDotsRuntimeBuildModifier)
         };
@@ -45,9 +47,6 @@ namespace Unity.Entities.Runtime.Build
             jsonObject["RootAssembly"] = rootAssembly.RootAssembly.name;
 #endif
 
-            // Managed debugging is disabled by default. It can be enabled
-            // using the IL2CPPSettings object, which implements IDotsRuntimeBuildModifier.
-            // See the code below which reads that object.
             jsonObject["EnableManagedDebugging"] = BuildSettingToggle.UseBuildConfiguration.ToString();
 
             // EnableBurst is defaulted to true but can be configured via the DotsRuntimeBurstSettings object
@@ -60,14 +59,6 @@ namespace Unity.Entities.Runtime.Build
 
             jsonObject["FinalOutputDirectory"] = GetFinalOutputDirectory(context, targetName);
             jsonObject["DotsConfig"] = profile.Configuration.ToString();
-
-            // todo: Remove once we have a single scene export pipeline
-            if (profile.UseNewPipeline)
-            {
-                var scriptingSettings = context.GetOrCreateValue<DotsRuntimeScriptingSettings>();
-                scriptingSettings.ScriptingDefines.Add("EXPERIMENTAL_SCENE_LOADING");
-                context.SetComponent(scriptingSettings);
-            }
 
             foreach (var component in context.GetComponents<IDotsRuntimeBuildModifier>())
             {

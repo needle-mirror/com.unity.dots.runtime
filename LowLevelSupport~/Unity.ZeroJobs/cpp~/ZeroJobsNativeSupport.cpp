@@ -28,31 +28,3 @@ Time_GetTicksToNanosecondsConversionRatio_Denominator()
     static Baselib_Timer_TickToNanosecondConversionRatio conversion = Baselib_Timer_GetTicksToNanosecondsConversionRatio();
     return conversion.ticksToNanosecondsDenominator;
 }
-
-static void* gTempSliceHandle = NULL;
-static baselib::mpmc_node_queue<baselib::mpmc_node> safetyNodeQueue;
-static baselib::Lock safetyHashLock;
-
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-
-DOTS_EXPORT(void) AtomicSafety_PushNode(void* node)
-{
-    safetyNodeQueue.push_back((baselib::mpmc_node*)node);
-}
-
-DOTS_EXPORT(void*) AtomicSafety_PopNode()
-{
-    return safetyNodeQueue.try_pop_front();
-}
-
-DOTS_EXPORT(void) AtomicSafety_LockSafetyHashTables()
-{
-    safetyHashLock.Acquire();
-}
-
-DOTS_EXPORT(void) AtomicSafety_UnlockSafetyHashTables()
-{
-    safetyHashLock.Release();
-}
-
-#endif

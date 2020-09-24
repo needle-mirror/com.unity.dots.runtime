@@ -59,7 +59,12 @@ namespace Unity.Entities.Runtime.Build
             using (StreamWriter sw = new StreamWriter(file.ToString()))
             {
                 sw.NewLine = "\n";
+                #if UNITY_EDITOR_LINUX
+                sw.WriteLine($@"#!/bin/bash");
+                #else
+                // sh is not good enough for printf, but on mac it'll be either zsh or bash
                 sw.WriteLine($@"#!/bin/sh");
+                #endif
                 sw.WriteLine();
                 sw.WriteLine("MONO=");
                 sw.WriteLine($@"BEE=""$PWD/{BeePath.RelativeTo(directory).ToString(SlashMode.Forward)}""");
@@ -74,6 +79,11 @@ namespace Unity.Entities.Runtime.Build
                 sw.WriteLine("    eval \"${cmdToRun}\"");
                 sw.WriteLine("fi");
             }
+
+#if !UNITY_EDITOR_WIN
+            System.Diagnostics.Process.Start("chmod", $"+x \"{file.ToString()}\"")
+                .WaitForExit();
+#endif
 
             var cmdFile = directory.Combine("bee.cmd");
             using (StreamWriter sw = new StreamWriter(cmdFile.ToString()))

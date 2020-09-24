@@ -28,23 +28,23 @@ using std::map;
 
 void* loadLibrary(const char* libname)
 {
-    #if UNITY_WINDOWS
+#if UNITY_WINDOWS
     return (void*)LoadLibraryA(libname);
-    #elif UNITY_MACOSX
-    const char* name = (string(libname) + ".dylib").c_str();
-    void* ret = (void*)dlopen(name, RTLD_NOW);
+#elif UNITY_MACOSX
+    string name = (string(libname) + ".dylib");
+    void* ret = (void*)dlopen(name.c_str(), RTLD_NOW);
     if (ret == NULL)
     {
-        const char* name2 = (string(libname) + ".bundle").c_str();
-        ret = (void*)dlopen(name2, RTLD_NOW);
+        name = (string(libname) + ".bundle");
+        ret = (void*)dlopen(name.c_str(), RTLD_NOW);
     }
         
     return ret;
-    #else
-    const char* name = (string(libname) + ".so").c_str();
-    void* ret = (void*)dlopen(name, RTLD_NOW);
+#else
+    string name = (string(libname) + ".so");
+    void* ret = (void*)dlopen(name.c_str(), RTLD_NOW);
     return ret;
-    #endif
+#endif
 }
 
 void* loadFn(void* library, const char* fname)

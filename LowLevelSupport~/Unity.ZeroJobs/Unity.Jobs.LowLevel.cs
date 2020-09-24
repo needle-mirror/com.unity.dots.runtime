@@ -4,6 +4,7 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.Assertions;
 using Unity.Burst;
+using Unity.Core;
 
 namespace Unity.Jobs.LowLevel.Unsafe
 {
@@ -316,14 +317,16 @@ namespace Unity.Jobs.LowLevel.Unsafe
             s_JobWorkerCount.Data = Environment.ProcessorCount < 8 ? Environment.ProcessorCount : 8;
             s_JobQueue.Data = CreateJobQueue((IntPtr)UnsafeUtility.AddressOf(ref JobQueueName[0]), (IntPtr)UnsafeUtility.AddressOf(ref WorkerThreadName[0]), JobWorkerCount);
             s_BatchScheduler.Data = CreateJobBatchScheduler();
+            AtomicSafetyHandle.AtomicSafetyHandle_SetBatchScheduler((void*)s_BatchScheduler.Data);
 #endif
         }
 
-        public static void Shutdown()
+        public static unsafe void Shutdown()
         {
 #if !UNITY_SINGLETHREADED_JOBS
             if (s_BatchScheduler.Data != IntPtr.Zero)
             {
+                AtomicSafetyHandle.AtomicSafetyHandle_SetBatchScheduler(null);
                 DestroyJobBatchScheduler(s_BatchScheduler.Data);
                 s_BatchScheduler.Data = IntPtr.Zero;
             }
@@ -351,13 +354,17 @@ namespace Unity.Jobs.LowLevel.Unsafe
         public static unsafe JobHandle ScheduleJob(IntPtr jobFuncPtr, JobMetaData* jobDataPtr, JobHandle dependsOn)
         {
             Assert.IsTrue(JobQueue != IntPtr.Zero);
-            return ScheduleJobBatch(BatchScheduler, jobFuncPtr, jobDataPtr, dependsOn);
+
+            ScheduleJobBatch(BatchScheduler, jobFuncPtr, jobDataPtr, ref dependsOn, out var jobHandle);
+            return jobHandle;
         }
 
         public static unsafe JobHandle ScheduleJobParallelFor(IntPtr jobFuncPtr, IntPtr jobCompletionFuncPtr, JobMetaData* jobDataPtr, int arrayLength, int innerloopBatchCount, JobHandle dependsOn)
         {
             Assert.IsTrue(JobQueue != IntPtr.Zero && BatchScheduler != IntPtr.Zero);
-            return ScheduleJobBatchParallelFor(BatchScheduler, jobFuncPtr, jobDataPtr, arrayLength, innerloopBatchCount, jobCompletionFuncPtr, dependsOn);
+
+            ScheduleJobBatchParallelFor(BatchScheduler, jobFuncPtr, jobDataPtr, arrayLength, innerloopBatchCount, jobCompletionFuncPtr, ref dependsOn, out var jobHandle);
+            return jobHandle;
         }
 
         [DllImport(nativejobslib)]
@@ -373,10 +380,10 @@ namespace Unity.Jobs.LowLevel.Unsafe
         internal static extern void DestroyJobBatchScheduler(IntPtr scheduler);
 
         [DllImport(nativejobslib)]
-        internal static extern unsafe JobHandle ScheduleJobBatch(IntPtr scheduler, IntPtr func, JobMetaData* userData, JobHandle dependency);
+        internal static extern unsafe void ScheduleJobBatch(IntPtr scheduler, IntPtr func, JobMetaData* userData, ref JobHandle dependency, out JobHandle jobHandle);
 
         [DllImport(nativejobslib)]
-        internal static extern unsafe JobHandle ScheduleJobBatchParallelFor(IntPtr scheduler, IntPtr func, JobMetaData* userData, int arrayLength, int innerloopBatchCount, IntPtr completionFunc, JobHandle dependency);
+        internal static extern unsafe void ScheduleJobBatchParallelFor(IntPtr scheduler, IntPtr func, JobMetaData* userData, int arrayLength, int innerloopBatchCount, IntPtr completionFunc, ref JobHandle dependency, out JobHandle jobHandle);
 
         [DllImport(nativejobslib)]
         internal static extern unsafe void ScheduleMultiDependencyJob(ref JobHandle fence, IntPtr dispatch, JobHandle* dependencies, int fenceCount);
@@ -385,7 +392,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
         internal static extern void ScheduleBatchedJobs(IntPtr scheduler);
 
         [DllImport(nativejobslib, EntryPoint = "ScheduleBatchedJobsAndComplete")]
-        internal static extern void ScheduleBatchedJobsAndCompleteInternal(IntPtr scheduler, ref JobHandle jobHandle);
+        internal static extern void ScheduleBatchedJobsAndCompleteInternal(IntPtr scheduler, out JobHandle jobHandle);
 
         [DllImport(nativejobslib, EntryPoint = "IsCompleted")]
         internal static extern int IsCompletedInternal(IntPtr scheduler, ref JobHandle jobHandle);
@@ -456,7 +463,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
         public static void ScheduleBatchedJobsAndComplete(ref JobHandle jobHandle)
         {
 #if !UNITY_SINGLETHREADED_JOBS
-            ScheduleBatchedJobsAndCompleteInternal(BatchScheduler, ref jobHandle);
+            ScheduleBatchedJobsAndCompleteInternal(BatchScheduler, out jobHandle);
 #else
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             DebugDidSyncFence(ref jobHandle);
@@ -731,13 +738,16 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
                         void* dst = (byte*) unmanagedJobData + sizeof(JobMetaData);
                         void* src = (byte*) managedJobDataPtr + sizeof(JobMetaData);
+
+                        // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.EnterTempScope();
                         UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
                         CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
 
-                        // In the single threaded case, this is synchronous execution.
                         UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
                         UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
+                        UnsafeUtility.ExitTempScope();
                     }
                     else
 #endif
@@ -745,8 +755,10 @@ namespace Unity.Jobs.LowLevel.Unsafe
                         CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
 
                         // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.EnterTempScope();
                         UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
                         UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
+                        UnsafeUtility.ExitTempScope();
                     }
                 }
                 finally
@@ -824,6 +836,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
             UnsafeUtility.CopyPtrToStructure(managedJobDataPtr, out jobMetaData);
             Assert.IsTrue(jobMetaData.jobDataSize > 0); // set by JobScheduleParameters
             jobMetaData.managedPtr = managedJobDataPtr;
+            jobMetaData.isParallelFor = 0;
             UnsafeUtility.CopyStructureToPtr(ref jobMetaData, managedJobDataPtr);
 
             JobHandle jobHandle = default;
@@ -866,12 +879,17 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
                         void* dst = (byte*) unmanagedJobData + sizeof(JobMetaData);
                         void* src = (byte*) managedJobDataPtr + sizeof(JobMetaData);
+
+                        UnsafeUtility.EnterTempScope();
+
                         UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
                         // In the single threaded case, this is synchronous execution.
                         // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
                         CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+
                         UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
+                        UnsafeUtility.ExitTempScope();
                     }
                     else
 #endif
@@ -879,7 +897,9 @@ namespace Unity.Jobs.LowLevel.Unsafe
                         CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, null);
 
                         // In the single threaded case, this is synchronous execution.
+                        UnsafeUtility.EnterTempScope();
                         UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
+                        UnsafeUtility.ExitTempScope();
                     }
                 }
                 finally

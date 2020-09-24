@@ -15,7 +15,8 @@ mergeInto(LibraryManager.library, {
             self.ws.onmessage = null;
             self.ws.onclose = null;
             self.ws.close();
-            console.log("WebGL Player Connection disconnected");
+            if (self.pcStateConnected)
+                console.log("WebGL Player Connection disconnected");
             delete self.ws;
 
             self.pcStateConnected = false;
@@ -41,6 +42,17 @@ mergeInto(LibraryManager.library, {
 
     js_html_playerconnectionConnect : function(address) {
         var stringAddress = UTF8ToString(address);
+
+        if (typeof location === 'object' && location.search && typeof URLSearchParams === 'function')
+        {
+            var params = new URLSearchParams(location.search);
+            if (params.has("unityPlayerConnection"))
+                stringAddress = params.get("unityPlayerConnection");
+        }
+
+        if (!stringAddress)
+            return;
+
         this.ws = new WebSocket(stringAddress, "binary");
         this.ws.binaryType = "arraybuffer";
         
@@ -71,7 +83,8 @@ mergeInto(LibraryManager.library, {
         };
         
         this.ws.onclose = function() {
-            console.log("WebGL Player Connection closed");
+            if (self.pcStateConnected)
+                console.log("WebGL Player Connection closed");
             self.ws.onopen = null;
             self.ws.onmessage = null;
             self.ws.onclose = null;

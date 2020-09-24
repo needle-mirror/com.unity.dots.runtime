@@ -269,7 +269,7 @@ namespace Unity.Development.PlayerConnection
 #endif
         private static int initRetryCounter = 0;
 
-        private static MessageStream receiveStream = new MessageStream(kReserveCapacityReceive);
+        private static MessageStream receiveStream = default;
 
         public const int kReserveCapacityReceive = 8192;
         public const int kInitRetryCounter = 30;

@@ -94,9 +94,11 @@ namespace Unity.Entities.Runtime.Build
                         var destinationFile = dataDirectory.FullName + Path.DirectorySeparatorChar + EntityScenesPaths.RelativePathFolderFor(sceneGuid, EntityScenesPaths.PathType.EntitiesConversionLog, -1);
                         new NPath(artifactPath).MakeAbsolute().Copy(new NPath(destinationFile).MakeAbsolute().EnsureParentDirectoryExists());
                         exportedFiles.Add(new FileInfo(destinationFile));
-                        succeeded = CheckConversionLog(artifactPath);
-                        if(!succeeded)
+                        if (!CheckConversionLog(artifactPath))
+                        {
                             UnityEngine.Debug.LogError("Failed to export scene: " + Path.GetFileName(AssetDatabase.GUIDToAssetPath(sceneGuid.ToString())));
+                            succeeded = false;
+                        }
                     }
                     else if (new Hash128(ext).IsValid) //Asset files are exported as {artifactHash}.{assetguid}
                     {
@@ -116,15 +118,9 @@ namespace Unity.Entities.Runtime.Build
                 manifest.Add(new Guid(sceneGuid.ToString()), AssetDatabase.GUIDToAssetPath(sceneGuid.ToString()), exportedFiles);
             }
 
-            // TODO: We want to just add the written catalog file to the manifest but Platforms.Build currently
-            // doesn't support non-classic BuildPipelines from doing so
-            var finalOutputDirectory = BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName);
-            if (!Directory.Exists(finalOutputDirectory)) Directory.CreateDirectory(finalOutputDirectory);
-
-            var catalogPath = Path.Combine(finalOutputDirectory, "Data");
-            if (!Directory.Exists(catalogPath)) Directory.CreateDirectory(catalogPath);
-            catalogPath = Path.Combine(catalogPath, SceneSystem.k_SceneInfoFileName);
+            var catalogPath = Path.Combine(dataDirectory.ToString(), SceneSystem.k_SceneInfoFileName);
             WriteCatalogFile(catalogPath, buildScenes);
+            manifest.AddAdditionalFilesToDeploy(new FileInfo(catalogPath.ToString()));
 
             sceneBuildConfigGuids.Dispose();
             artifactHashes.Dispose();
@@ -176,6 +172,15 @@ namespace Unity.Entities.Runtime.Build
             builder.Dispose();
         }
 
+        static readonly string[] s_FilteredLogType =
+        {
+            LogType.Log.ToString(),
+            LogType.Warning.ToString(),
+            LogType.Error.ToString(),
+            LogType.Exception.ToString(),
+            LogType.Assert.ToString()
+        };
+
         static bool CheckConversionLog(string artifactPath)
         {
             bool validLog = true;
@@ -184,14 +189,27 @@ namespace Unity.Entities.Runtime.Build
                 var line = "";
                 while ((line = reader.ReadLine()) != null)
                 {
-                    var strArray = line.Split(':');
-                    var prefix = strArray[0];
-                    if (prefix.Contains(LogType.Error.ToString()) || prefix.Contains(LogType.Exception.ToString()))
+                    var prefixLog = line.Split(':')[0];
+                    if (prefixLog.Contains(LogType.Error.ToString()))
                     {
                         Debug.LogError(line);
                         validLog = false;
                     }
-                    else if(prefix.Contains(LogType.Warning.ToString()))
+                    else if(prefixLog.Contains(LogType.Exception.ToString()))
+                    {
+                        string message = line + "\n";
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            var prefixExc = line.Split(':')[0];
+                            if (!s_FilteredLogType.Any(s => prefixExc.StartsWith(s)))
+                                message += line + "\n";
+                            else
+                                break;
+                        }
+                        Debug.LogError(message);
+                        validLog = false;
+                    }
+                    else if(prefixLog.Contains(LogType.Warning.ToString()))
                         Debug.LogWarning(line);
                 }
             }

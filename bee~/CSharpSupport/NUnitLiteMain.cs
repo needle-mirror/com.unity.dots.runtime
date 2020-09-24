@@ -19,9 +19,15 @@ public static class Program {
         UnityInstance.BurstInit();
 
         DotsRuntime.Initialize();
+
         TempMemoryScope.EnterScope();
-        
+        // Static storage used for the whole lifetime of the process. Create it once here
+        // so heap tracking tests won't fight over the storage causing alloc/free mismatches
+        WordStorage.Setup();
+
+        // TypeManager initialization uses temp memory, so let's free it before creating a global scope
         Unity.Entities.TypeManager.Initialize();
+        TempMemoryScope.ExitScope();
 
         // Should have stack trace with tests
         NativeLeakDetection.Mode = NativeLeakDetectionMode.EnabledWithStackTrace;
@@ -35,10 +41,12 @@ public static class Program {
 #else
         result = new AutoRun().Execute(args);
 #endif
-        
-        Unity.Entities.TypeManager.Shutdown();
 
+        TempMemoryScope.EnterScope();
+        Unity.Entities.TypeManager.Shutdown();
+        WordStorage.Instance.Dispose();
         TempMemoryScope.ExitScope();
+
         DotsRuntime.Shutdown();
 
         return result;

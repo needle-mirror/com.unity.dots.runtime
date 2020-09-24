@@ -1,0 +1,16 @@
+{
+    "name": "Unity.Tiny.IO.Tests",
+    "references": [
+        "Unity.Collections",
+        "Unity.Entities",
+        "Unity.Tiny.Core",
+        "Unity.Tiny.IO",
+        "Unity.Tiny.Tests.Common"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [ "Editor", "WebGL" ],
+	"allowUnsafeCode": true
+}

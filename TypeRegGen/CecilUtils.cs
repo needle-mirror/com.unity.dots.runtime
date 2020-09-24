@@ -140,7 +140,30 @@ namespace Unity.ZeroPlayer
                 }
 
                 importedFields.Add(importedField);
-                field.Resolve().IsPublic = true;
+                var fieldDef = field.Resolve();
+                fieldDef.IsPublic = true;
+
+                // According to the C# Standard https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/cs0052
+                // Fields must have the same access level as their declared field access level so when we mark something
+                // as being public we need to also make sure the generic params type within this field has the same access.
+                // level which in this case is public
+                if (fieldDef.FieldType is GenericInstanceType g) {
+                    foreach (var parm in g.GenericArguments) {
+                        var resolveType = parm.Resolve();
+                        if (resolveType != null && !resolveType.IsPublic) {
+                            resolveType.IsPublic = true;
+                            if (resolveType.IsNested)
+                                resolveType.IsNestedPublic = true;
+                        }
+                    }
+                }
+
+                if (field.DeclaringType != null) {
+                    var d = field.DeclaringType.Resolve();
+                    d.IsPublic = true;
+                    if (d.IsNested)
+                        d.IsNestedPublic = true;
+                }
             }
 
             return importedFields;

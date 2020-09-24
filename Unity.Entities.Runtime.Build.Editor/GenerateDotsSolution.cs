@@ -20,7 +20,7 @@ namespace Unity.Entities.Runtime.Build
     {
         const string k_WindowTitle = "Generate DOTS C# Solution";
         static HashSet<BuildConfiguration> s_BuildConfigurations;
-        static HashSet<string> s_settingsFiles;
+        static HashSet<int> s_settingsFileHashes;
         TreeViewState m_TreeViewState;
         GenerateDotsSolutionView m_GenerateDotsSolutionView;
 
@@ -42,13 +42,13 @@ namespace Unity.Entities.Runtime.Build
 
         static void RebuildAlreadyGeneratedConfigList()
         {
-            s_settingsFiles = new HashSet<string>();
+            s_settingsFileHashes = new HashSet<int>();
             var settingsDirectory = GenerateDotsSolutionView.BeeRootDirectory.Combine("settings").ToString();
             if (Directory.Exists(settingsDirectory))
             {
                 foreach (var path in Directory.GetFiles(settingsDirectory))
                 {
-                    s_settingsFiles.Add(Path.GetFileNameWithoutExtension(path));
+                    s_settingsFileHashes.Add(Path.GetFileNameWithoutExtension(path).GetHashCode());
                 }
             }
         }
@@ -64,7 +64,6 @@ namespace Unity.Entities.Runtime.Build
             RebuildAlreadyGeneratedConfigList();
 
             m_GenerateDotsSolutionView = new GenerateDotsSolutionView(m_TreeViewState);
-            GenerateDotsSolutionView.ShouldReload = true;
         }
 
         void OnGUI()
@@ -121,7 +120,6 @@ namespace Unity.Entities.Runtime.Build
             // Get existing open window or if none, make a new one
             var window = GetWindow<GenerateDotsSolutionWindow>();
             window.titleContent = new GUIContent(k_WindowTitle);
-            window.minSize = new Vector2(750, 600);
             window.Show();
         }
 
@@ -177,10 +175,21 @@ namespace Unity.Entities.Runtime.Build
                 RootGameAssembly,
                 Target,
                 Configuration,
-                BuildAssetName,
+                BuildTargetName,
             }
 
-            class BuildConfigViewItem : TreeViewItem
+            abstract class ConfigViewItem : TreeViewItem
+            {
+                public BuildType Configuration;
+                public string TargetName;
+                public bool IncludeInSolution;
+                public string BuildTargetName;
+
+                public override string displayName => null; // we don't want a display name for the row
+                public override int depth => parent?.depth + 1 ?? 0;
+            }
+
+            class BuildConfigViewItem : ConfigViewItem
             {
                 class BuildConfigurationAssetPostProcessor : AssetPostprocessor
                 {
@@ -207,28 +216,37 @@ namespace Unity.Entities.Runtime.Build
                 public BuildConfigViewItem(BuildConfiguration buildConfig)
                 {
                     BuildConfiguration = buildConfig;
-                    BuildProfile = buildConfig.GetComponent<DotsRuntimeBuildProfile>();
-                    RootAssembly = buildConfig.GetComponent<DotsRuntimeRootAssembly>();
-                    var settingsFileName = RootAssembly.MakeBeeTargetName(buildConfig.name);
-                    IncludeInSolution = s_settingsFiles.Contains(settingsFileName);
+
+                    var buildProfile = buildConfig.GetComponent<DotsRuntimeBuildProfile>();
+                    var rootAssembly = buildConfig.GetComponent<DotsRuntimeRootAssembly>();
+                    Configuration = buildProfile.Configuration;
+                    TargetName = buildProfile.Target.DisplayName;
+
+                    BuildTargetName = rootAssembly.MakeBeeTargetName(buildConfig.name);
+                    IncludeInSolution = s_settingsFileHashes.Contains(BuildTargetName.GetHashCode());
                 }
 
-                public BuildConfiguration BuildConfiguration;
-                public DotsRuntimeBuildProfile BuildProfile;
-                public DotsRuntimeRootAssembly RootAssembly;
-                public string BuildAssetName => BuildConfiguration != null ? BuildConfiguration.name : "";
-#if UNITY_2020_1_OR_NEWER
-                public string RootGameAssembly => BuildProfile != null ? RootAssembly.RootAssembly.asset.name : "";
-#else
-                public string RootGameAssembly => BuildProfile != null ? RootAssembly.RootAssembly.name : "";
-#endif
-                public string Target => BuildProfile != null ? BuildProfile.Target.DisplayName : "";
-                public bool IncludeInSolution { get; set; }
-
-                public override string displayName => null;
-                public override int id => BuildConfiguration.GetHashCode() * 7919 ^ BuildProfile.GetHashCode();
-                public override int depth => parent?.depth + 1 ?? 0;
+                public readonly BuildConfiguration BuildConfiguration;
+                public override int id => BuildConfiguration.GetHashCode() * 7919 ^ Configuration.GetHashCode() * 7919 ^ TargetName.GetHashCode();
             }
+
+#if DOTS_TEST_RUNNER
+            class RuntimeTestTargetConfigViewItem : ConfigViewItem
+            {
+                public RuntimeTestTargetConfigViewItem(RuntimeTestTarget target)
+                {
+                    RuntimeTestTarget = target;
+                    Configuration = target.BuildType;
+                    TargetName = target.BuildTarget.DisplayName;
+
+                    BuildTargetName = target.FullName;
+                    IncludeInSolution = s_settingsFileHashes.Contains(BuildTargetName.GetHashCode());
+                }
+
+                public readonly RuntimeTestTarget RuntimeTestTarget;
+                public override int id => RuntimeTestTarget.GetHashCode();
+            }
+#endif
 
             class RootAssemblyViewItem : TreeViewItem
             {
@@ -300,7 +318,7 @@ namespace Unity.Entities.Runtime.Build
                 {
                     foreach (var child in rootItem.children)
                     {
-                        var items = child.children.Cast<BuildConfigViewItem>();
+                        var items = child.children.Cast<ConfigViewItem>();
                         var isAscending = multiColumnHeader.IsSortedAscending(columnIndex);
                         switch (column)
                         {
@@ -308,13 +326,13 @@ namespace Unity.Entities.Runtime.Build
                                 items = isAscending ? items.OrderBy(item => item.IncludeInSolution) : items.OrderByDescending(item => item.IncludeInSolution);
                                 break;
                             case Column.Target:
-                                items = isAscending ? items.OrderBy(item => item.Target) : items.OrderByDescending(item => item.Target);
+                                items = isAscending ? items.OrderBy(item => item.TargetName) : items.OrderByDescending(item => item.TargetName);
                                 break;
                             case Column.Configuration:
-                                items = isAscending ? items.OrderBy(item => item.BuildProfile.Configuration) : items.OrderByDescending(item => item.BuildProfile.Configuration);
+                                items = isAscending ? items.OrderBy(item => item.Configuration) : items.OrderByDescending(item => item.Configuration);
                                 break;
-                            case Column.BuildAssetName:
-                                items = isAscending ? items.OrderBy(item => item.BuildAssetName) : items.OrderByDescending(item => item.BuildAssetName);
+                            case Column.BuildTargetName:
+                                items = isAscending ? items.OrderBy(item => item.BuildTargetName) : items.OrderByDescending(item => item.BuildTargetName);
                                 break;
                         }
                         child.children = items.Cast<TreeViewItem>().ToList();
@@ -387,8 +405,8 @@ namespace Unity.Entities.Runtime.Build
                         headerTextAlignment = TextAlignment.Center,
                         sortedAscending = true,
                         sortingArrowAlignment = TextAlignment.Right,
-                        width = 110,
-                        minWidth = 110,
+                        width = 220,
+                        minWidth = 220,
                         autoResize = true
                     },
                     new MultiColumnHeaderState.Column
@@ -403,12 +421,12 @@ namespace Unity.Entities.Runtime.Build
                     },
                     new MultiColumnHeaderState.Column
                     {
-                        headerContent = new GUIContent("Build Configuration Asset", "Build Configurations Assets in project 'blah'"),
+                        headerContent = new GUIContent("Build Target Name", "Name of build target invoked by the build system. This is typically the output directory name under '<ProjectRoot>/Builds/'"),
                         headerTextAlignment = TextAlignment.Center,
                         sortedAscending = true,
                         sortingArrowAlignment = TextAlignment.Right,
-                        width = 200,
-                        minWidth = 200,
+                        width = 350,
+                        minWidth = 350,
                         autoResize = true
                     },
                 };
@@ -443,7 +461,7 @@ namespace Unity.Entities.Runtime.Build
 
             protected override float GetCustomRowHeight(int row, TreeViewItem item)
             {
-                if (item is BuildConfigViewItem)
+                if (item is ConfigViewItem)
                 {
                     return 22.0f;
                 }
@@ -459,7 +477,7 @@ namespace Unity.Entities.Runtime.Build
             {
                 switch (args.item)
                 {
-                    case BuildConfigViewItem buildConfigItem:
+                    case ConfigViewItem buildConfigItem:
                         for (int i = 0; i < args.GetNumVisibleColumns(); ++i)
                         {
                             DrawRowCell(args.GetCellRect(i), (Column)args.GetColumn(i), buildConfigItem, args);
@@ -478,7 +496,7 @@ namespace Unity.Entities.Runtime.Build
                 base.RowGUI(args);
             }
 
-            void DrawRowCell(Rect rect, Column column, BuildConfigViewItem item, RowGUIArgs args)
+            void DrawRowCell(Rect rect, Column column, ConfigViewItem item, RowGUIArgs args)
             {
                 CenterRectUsingSingleLineHeight(ref rect);
 
@@ -502,17 +520,17 @@ namespace Unity.Entities.Runtime.Build
                     }
                     case Column.Target:
                     {
-                        DefaultGUI.Label(rect, item.Target, args.selected, args.focused);
+                        DefaultGUI.Label(rect, item.TargetName, args.selected, args.focused);
                         break;
                     }
                     case Column.Configuration:
                     {
-                        DefaultGUI.Label(rect, item.BuildProfile.Configuration.ToString(), args.selected, args.focused);
+                        DefaultGUI.Label(rect, item.Configuration.ToString(), args.selected, args.focused);
                         break;
                     }
-                    case Column.BuildAssetName:
+                    case Column.BuildTargetName:
                     {
-                        DefaultGUI.Label(rect, item.BuildAssetName, args.selected, args.focused);
+                        DefaultGUI.Label(rect, item.BuildTargetName, args.selected, args.focused);
                         break;
                     }
                 }
@@ -530,19 +548,48 @@ namespace Unity.Entities.Runtime.Build
                         int toggleWidth = 20;
                         toggleRect.x += rect.width * 0.5f - toggleWidth * 0.5f;
 
-                        bool toggleVal = EditorGUI.Toggle(toggleRect, viewItem.IncludeAllInSolution);
-                        if (toggleVal != viewItem.IncludeAllInSolution)
+                        bool allChildrenChecked = true;
+                        bool anyChildrenChecked = false;
+                        foreach (var child in args.item.children)
                         {
-                            viewItem.IncludeAllInSolution = toggleVal;
-
-                            foreach (var child in args.item.children)
+                            var buildConfigViewItem = child as ConfigViewItem;
+                            if (buildConfigViewItem != null)
                             {
-                                var buildConfigViewItem = child as BuildConfigViewItem;
-                                if (buildConfigViewItem != null)
-                                    buildConfigViewItem.IncludeInSolution = toggleVal;
+                                allChildrenChecked &= buildConfigViewItem.IncludeInSolution;
+                                anyChildrenChecked |= buildConfigViewItem.IncludeInSolution;
+                            }
+                        }
+
+                        bool isMixed = !allChildrenChecked && anyChildrenChecked;
+                        bool originalIncludeAllInSolutionValue = viewItem.IncludeAllInSolution;
+                        EditorGUI.showMixedValue = isMixed;
+                        var toggleValue = EditorGUI.Toggle(toggleRect, viewItem.IncludeAllInSolution);
+
+                        if (toggleValue != viewItem.IncludeAllInSolution)
+                        {
+                            viewItem.IncludeAllInSolution = toggleValue;
+                            EditorGUI.showMixedValue = false;
+
+                            // If the parent and children are all selected, and the user de-selects
+                            // a child, don't unset all other children, but allow the parent to be listed
+                            // as mixed (which is equivalent to false, so setting via toggleValue is no longer ok)
+                            if (!(originalIncludeAllInSolutionValue && !toggleValue && isMixed))
+                            {
+                                foreach (var child in args.item.children)
+                                {
+                                    if (child is ConfigViewItem buildConfigViewItem)
+                                        buildConfigViewItem.IncludeInSolution = toggleValue;
+                                }
                             }
 
                             Repaint();
+                        }
+                        else
+                        {
+                            EditorGUI.showMixedValue = false;
+
+                            if(allChildrenChecked)
+                                viewItem.IncludeAllInSolution = true;
                         }
 
                         break;
@@ -577,6 +624,23 @@ namespace Unity.Entities.Runtime.Build
                 }
             }
 
+            class RootAssemblyConfigInfo
+            {
+                public List<BuildConfiguration> BuildConfigurations = new List<BuildConfiguration>();
+#if DOTS_TEST_RUNNER
+                public List<RuntimeTestTarget> RuntimeTestTargets = new List<RuntimeTestTarget>();
+#endif
+
+                public bool HasConfigs()
+                {
+                    return BuildConfigurations.Count > 0
+#if DOTS_TEST_RUNNER
+                           || RuntimeTestTargets.Count > 0
+#endif
+                    ;
+                }
+            }
+
             protected override TreeViewItem BuildRoot()
             {
                 var idsToExpand = new List<int>();
@@ -584,11 +648,8 @@ namespace Unity.Entities.Runtime.Build
 
                 List<BuildConfiguration> buildConfigurations = new List<BuildConfiguration>();
                 buildConfigurations.AddRange(s_BuildConfigurations);
-#if DOTS_TEST_RUNNER
-                buildConfigurations.AddRange(GetTestBuildConfigs());
-#endif
 
-                Dictionary<RootAssemblyInfo, List<BuildConfiguration>> configMap = new Dictionary<RootAssemblyInfo, List<BuildConfiguration>>();
+                Dictionary<RootAssemblyInfo, RootAssemblyConfigInfo> configMap = new Dictionary<RootAssemblyInfo, RootAssemblyConfigInfo>();
                 foreach (var buildConfig in buildConfigurations)
                 {
                     bool hasRequiredComponents = true;
@@ -603,34 +664,58 @@ namespace Unity.Entities.Runtime.Build
                         if (dotsrtBuildProfile.Target.CanBuild)
                         {
                             var rootAssemblyInfo = new RootAssemblyInfo(dotsrtRootAssembly.ProjectName);
-                            if (!configMap.TryGetValue(rootAssemblyInfo, out var configList))
+                            if (!configMap.TryGetValue(rootAssemblyInfo, out var configInfo))
                             {
-                                configList = new List<BuildConfiguration>();
-                                configMap.Add(rootAssemblyInfo, configList);
+                                configInfo = new RootAssemblyConfigInfo();
+                                configMap.Add(rootAssemblyInfo, configInfo);
                             }
-                            configList.Add(buildConfig);
+                            configInfo.BuildConfigurations.Add(buildConfig);
                         }
                     }
                 }
 
-                foreach (var info in configMap.Keys)
+#if DOTS_TEST_RUNNER
+                var testTargets = GetTestTargets();
+                foreach (var target in testTargets)
                 {
-                    var projectViewItem = new RootAssemblyViewItem(info);
-
-                    var configList = configMap[info];
-                    if (configList.Count > 0)
+                    var rootAssemblyInfo = new RootAssemblyInfo(target.RootAssembly.name);
+                    if (!configMap.TryGetValue(rootAssemblyInfo, out var configInfo))
                     {
+                        configInfo = new RootAssemblyConfigInfo();
+                        configMap.Add(rootAssemblyInfo, configInfo);
+                    }
+                    configInfo.RuntimeTestTargets.Add(target);
+                }
+#endif
+
+                foreach (var assemblyInfo in configMap.Keys)
+                {
+                    var configInfo = configMap[assemblyInfo];
+                    if (configInfo.HasConfigs())
+                    {
+                        var projectViewItem = new RootAssemblyViewItem(assemblyInfo);
                         root.AddChild(projectViewItem);
+
                         bool includeAllInSolution = true;
                         bool expandParent = false;
-                        foreach (var buildConfig in configList)
+                        foreach (var buildConfig in configInfo.BuildConfigurations)
                         {
-                            var buildConfigViewItem = new BuildConfigViewItem(buildConfig);
-                            includeAllInSolution &= buildConfigViewItem.IncludeInSolution;
-                            expandParent |= buildConfigViewItem.IncludeInSolution;
+                            var configViewItem = new BuildConfigViewItem(buildConfig);
+                            includeAllInSolution &= configViewItem.IncludeInSolution;
+                            expandParent |= configViewItem.IncludeInSolution;
 
-                            projectViewItem.AddChild(buildConfigViewItem);
+                            projectViewItem.AddChild(configViewItem);
                         }
+#if DOTS_TEST_RUNNER
+                        foreach (var target in configInfo.RuntimeTestTargets)
+                        {
+                            var configViewItem = new RuntimeTestTargetConfigViewItem(target);
+                            includeAllInSolution &= configViewItem.IncludeInSolution;
+                            expandParent |= configViewItem.IncludeInSolution;
+
+                            projectViewItem.AddChild(configViewItem);
+                        }
+#endif
 
                         projectViewItem.IncludeAllInSolution = includeAllInSolution;
                         if (expandParent)
@@ -651,19 +736,14 @@ namespace Unity.Entities.Runtime.Build
             }
 
 #if DOTS_TEST_RUNNER
-            List<BuildConfiguration> GetTestBuildConfigs()
+            List<RuntimeTestTarget> GetTestTargets()
             {
-                var testBuildConfigs = new List<BuildConfiguration>();
                 var testFinder = new TestTargetFinder();
                 testFinder.LoadTestConfiguration();
-                testFinder.RetrieveUnitTests();
-                testFinder.RetrieveMultithreadingTests();
-                foreach (var test in testFinder.Tests)
-                    testBuildConfigs.Add(DotsTestRunner.GenerateBuildConfiguration(test));
+                testFinder.RetrieveTestTree();
 
-                return testBuildConfigs;
+                return testFinder.Tests;
             }
-
 #endif
 
             protected override void KeyEvent()
@@ -688,7 +768,7 @@ namespace Unity.Entities.Runtime.Build
 
                 foreach (var item in GetSelection()
                          .Select(id => FindItem(id, rootItem))
-                         .OfType<BuildConfigViewItem>())
+                         .OfType<ConfigViewItem>())
                 {
                     item.IncludeInSolution = !item.IncludeInSolution;
                 }
@@ -729,22 +809,26 @@ namespace Unity.Entities.Runtime.Build
             internal void SelectAllConfigs()
             {
                 foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
-                    item.IncludeAllInSolution = true;
-                foreach (var item in GetRows().OfType<BuildConfigViewItem>())
-                    item.IncludeInSolution = true;
+                {
+                    item.IncludeAllInSolution = false;
+                    foreach (var child in item.children.OfType<ConfigViewItem>())
+                        child.IncludeInSolution = true;
+                }
             }
 
             internal void UnselectAllConfigs()
             {
                 foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
+                {
                     item.IncludeAllInSolution = false;
-                foreach (var item in GetRows().OfType<BuildConfigViewItem>())
-                    item.IncludeInSolution = false;
+                    foreach (var child in item.children.OfType<ConfigViewItem>())
+                        child.IncludeInSolution = false;
+                }
             }
 
             internal bool AnyConfigsSelected()
             {
-                return GetRows().OfType<BuildConfigViewItem>().Any(item => item.IncludeInSolution);
+                return GetRows().OfType<ConfigViewItem>().Any(item => item.IncludeInSolution);
             }
 
             internal void GenerateSolution()
@@ -755,14 +839,27 @@ namespace Unity.Entities.Runtime.Build
                     if (Directory.Exists(settingsDirectory))
                         Directory.Delete(settingsDirectory, true);
 
-                    foreach (var project in GetRows().OfType<BuildConfigViewItem>().Where(item => item.IncludeInSolution))
+                    foreach (var configItem in GetRows().OfType<ConfigViewItem>().Where(item => item.IncludeInSolution))
                     {
-                        progress.Title = $"Generating '{project.BuildAssetName}'";
+                        progress.Title = $"Generating '{configItem.BuildTargetName}'";
 
-                        var buildPipeline = project.BuildConfiguration.GetComponent<DotsRuntimeBuildProfile>().Pipeline;
+                        BuildConfiguration buildConfig = null;
+                        if (configItem is BuildConfigViewItem buildConfigItem)
+                            buildConfig = buildConfigItem.BuildConfiguration;
+#if DOTS_TEST_RUNNER
+                        else if(configItem is RuntimeTestTargetConfigViewItem runtimeTestTargetConfigViewItem)
+                        {
+                            buildConfig = DotsTestRunner.GenerateBuildConfiguration(runtimeTestTargetConfigViewItem.RuntimeTestTarget);
+                            DotsTestRunner.HackPreRunBuildConfigFixup(buildConfig);
+                        }
+#endif
+                        else
+                        {
+                            throw new Exception("Invalid row type in generate solution window view!");
+                        }
+
+                        var buildPipeline = buildConfig.GetComponent<DotsRuntimeBuildProfile>().Pipeline;
                         var steps = new List<Type>();
-                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportEntities()))
-                            steps.Add(typeof(BuildStepExportEntities));
 
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportScenes()))
                             steps.Add(typeof(BuildStepExportScenes));
@@ -770,17 +867,24 @@ namespace Unity.Entities.Runtime.Build
                         if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration()))
                             steps.Add(typeof(BuildStepExportConfiguration));
 
-                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration2()))
-                            steps.Add(typeof(BuildStepExportConfiguration2));
-
                         steps.Add(typeof(BuildStepGenerateBeeFiles));
 
                         var pipeline = new GenerateDotsSolutionBuildPipeline(steps);
-                        pipeline.Build(project.BuildConfiguration, progress);
+                        pipeline.Build(buildConfig, progress);
+
+                        var result = pipeline.Build(buildConfig, progress);
+                        if (result.Failed)
+                        {
+                            UnityEngine.Debug.LogError($"{k_WindowTitle} failed.\n{(result.Exception != null ? result.Exception.ToString() : result.Message)}");
+                        }
                     }
 
                     RunBeeProjectFiles(progress);
                 }
+
+#if DOTS_TEST_RUNNER
+                DotsTestRunner.ClearTestBuildConfigs();
+#endif
             }
 
             public static void RunBeeProjectFiles(BuildProgress progress = null)

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
 using Bee.Core;
 using Bee.CSharpSupport;
 using Bee.VisualStudioSolution;
@@ -11,8 +10,8 @@ using Bee.Stevedore;
 using Bee.Tools;
 using Bee.TundraBackend;
 using Newtonsoft.Json.Linq;
-using Unity.BuildTools;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.NativeProgramSupport;
+using Bee.Core.Stevedore;
 
 class BuildProgramBuildProgram
 {
@@ -22,7 +21,7 @@ class BuildProgramBuildProgram
     {
         var bee = new NPath(typeof(CSharpProgram).Assembly.Location);
 
-        StevedoreGlobalSettings.Instance = new StevedoreGlobalSettings
+        Backend.Current.StevedoreSettings = new StevedoreSettings
         {
             // Manifest entries always override artifact IDs hard-coded in Bee
             // Setting EnforceManifest to true will also ensure no artifacts
@@ -33,8 +32,7 @@ class BuildProgramBuildProgram
                 bee.Parent.Combine("manifest.stevedore").ToString(),
             },
         };
-        //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
-        CSharpConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release, DownloadableCsc.Csc72, DebugFormat.PortablePdb);
+        CSharpConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release, null, DebugFormat.PortablePdb);
 
         var asmdefsFile = new NPath("asmdefs.json").MakeAbsolute();
 
@@ -88,13 +86,16 @@ class BuildProgramBuildProgram
             },
             Framework = {Framework.Framework471},
             LanguageVersion = "7.2",
-            References = { bee, new SystemReference("System.Xml.Linq"), new SystemReference("System.Xml") },
+            References = { bee },
             ProjectFile = { Path = NPath.CurrentDirectory.Combine("buildprogram.gen.csproj")}
         };
         buildProgram.Defines.Add("DOTS_BUILD_PROGRAM");
+        // This can be removed at some point in the future but it allowed me to not break
+        // backwards compat and land things earlier in the burst repo 
+        buildProgram.Defines.Add("NEW_BEE_NAMESPACES_REMOVE"); 
 
-        ((TundraBackend)Backend.Current).AddExtensionToBeScannedByHashInsteadOfTimeStamp("json", "config");
-
+        Backend.Current.AddExtensionToBeScannedByHashInsteadOfTimeStamp("json", "config");
+        
         buildProgram.ProjectFile.AddCustomLinkRoot(bee.Parent.Combine("BuildProgramSources"), ".");
         buildProgram.SetupSpecificConfiguration(CSharpConfig);
 
@@ -104,6 +105,7 @@ class BuildProgramBuildProgram
             Sources = {
                 bee.Parent.Combine("BuildProgramBuildProgramSources")
             },
+            Defines = {"NEW_BEE_NAMESPACES_REMOVE"}, // see comment above
             LanguageVersion = "7.2",
             Framework = { Framework.Framework471},
             References = { bee }

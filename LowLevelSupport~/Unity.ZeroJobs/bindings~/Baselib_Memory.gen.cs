@@ -85,7 +85,7 @@ namespace Unity.Baselib.LowLevel
         /// <remarks>Allocation failures or invalid alignments will trigger process abort.</remarks>
         /// <param name="size">Size of the allocation. No special restrictions (like  multiples of alignment) apply, zero is valid.</param>
         /// <param name="alignment">
-        /// Needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
+        /// Needs to be a power of two which is also a multiple of of pointer size (i.e. sizeof(void*)) but less or equal to Baselib_Memory_MaxAlignment.
         /// Any alignment smaller than Baselib_Memory_MinGuaranteedAlignment, will be clamped to Baselib_Memory_MinGuaranteedAlignment.
         /// </param>
         /// <returns>Unique pointer to aligned allocation. This is true for zero sized allocations as well.</returns>
@@ -101,7 +101,7 @@ namespace Unity.Baselib.LowLevel
         /// </param>
         /// <param name="size">Size of the allocation. No special restrictions apply, zero is valid.</param>
         /// <param name="alignment">
-        /// Needs to be a power of two which is also a multiple of sizeof(void *) but less or equal to Baselib_Memory_MaxAlignment.
+        /// Needs to be a power of two which is also a multiple of of pointer size (i.e. sizeof(void*)) but less or equal to Baselib_Memory_MaxAlignment.
         /// Any alignment smaller than Baselib_Memory_MinGuaranteedAlignment, will be clamped to Baselib_Memory_MinGuaranteedAlignment.
         /// </param>
         /// <returns>Unique pointer to aligned allocation. This is true for zero sized allocations as well.</returns>
@@ -164,7 +164,9 @@ namespace Unity.Baselib.LowLevel
         /// Passing Baselib_Memory_PageAllocation with a nullptr or a zero page count result in a no-op.
         ///
         /// Possible error codes:
-        /// - Baselib_ErrorCode_InvalidAddressRange:     Address of the first page or number of pages doesn't match a previous allocation. This may also trigger undefined behavior.
+        /// - Baselib_ErrorCode_InvalidAddressRange:     Address range was detected to not match a valid allocation.
+        /// CAUTION: Not all platforms are able to detect this and may either raise an error or cause undefined behavior.
+        /// Note to implementors: Raising the error is strongly preferred as it helps identifying issues in user code.
         /// - Baselib_ErrorCode_InvalidPageSize:         If page size doesn't match a previous allocation at `pageAllocation.ptr`.
         ///
         /// Implementation note:
@@ -179,7 +181,8 @@ namespace Unity.Baselib.LowLevel
         /// Passing `nullptr` or a zero page count result in a no-op.
         ///
         /// Possible error codes:
-        /// - Baselib_ErrorCode_InvalidAddressRange:     Address of the first page or number of pages doesn't match a previous allocation. This may also trigger undefined behavior.
+        /// - Baselib_ErrorCode_InvalidAddressRange:     Address range is not covered by a valid allocation.
+        /// Platforms that emulate page allocations (e.g. Emscripten) are not able to present this error and will pass the function call silently.
         /// - Baselib_ErrorCode_InvalidPageSize:         If page size doesn't match the previous allocation at `addressOfFirstPage`.
         /// - Baselib_ErrorCode_UnsupportedPageState:    The underlying system doesn't support the requested page state (see Baselib_Memory_PageState).
         /// </remarks>

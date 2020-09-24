@@ -4,7 +4,8 @@ using System.Linq;
 using Bee.Core;
 using Bee.Stevedore;
 using NiceIO;
-using Unity.BuildTools;
+using Bee.Tools;
+using Bee.Core.Stevedore;
 
 class EditorToolsBuildProgram
 {
@@ -56,7 +57,6 @@ class EditorToolsBuildProgram
             return;
 
         var editorToolsSourceDirectory = rootPath.Combine("EditorTools/Src");
-        Backend.Current.Register(Node);
         var env = new Dictionary<string, string>()
         {
             { "PATH", $"{NodeDirectory.ToString()}{PathSeparator}{Environment.GetEnvironmentVariable("PATH")}" }
@@ -138,7 +138,6 @@ class EditorToolsBuildProgram
         };
 
         var EditorTools = new StevedoreArtifact("dots-editor-tools");
-        Backend.Current.Register(EditorTools);
 
         var dependencies = new List<NPath>();
         foreach (var file in EditorTools.GetFileList())

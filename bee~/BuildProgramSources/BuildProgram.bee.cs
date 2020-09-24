@@ -12,14 +12,13 @@ using Bee.Tools;
 using Bee.TundraBackend;
 using Bee.VisualStudioSolution;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildSystem.NativeProgramSupport;
-using static Unity.BuildSystem.NativeProgramSupport.NativeProgramConfiguration;
+using Bee.NativeProgramSupport;
+using static Bee.NativeProgramSupport.NativeProgramConfiguration;
 using Bee.Toolchain.Extension;
 using Bee.Toolchain.VisualStudio;
 using Newtonsoft.Json.Linq;
-using Unity.BuildTools;
 using System.IO;
+using Bee.Core.Stevedore;
 
 public class BuildProgram
 {
@@ -40,7 +39,7 @@ public class BuildProgram
      * otherwise bee will generate sdk style project files, which are broken with tiny.
      */
     public static Framework HackedFrameworkToUseForProjectFilesIfNecessary => IsRequestedTargetExactlyProjectFiles()
-        ? (Framework) Framework.Framework461
+        ? (Framework) Framework.Framework46
         : Framework.NetStandard20;
 
     public static Dictionary<string, List<DotsRuntimeCSharpProgramConfiguration>> PerConfigBuildSettings { get; set; } =
@@ -98,15 +97,9 @@ public class BuildProgram
 
     static void Main()
     {
-        if (!(Backend.Current is TundraBackend))
-        {
-            StandaloneBeeDriver.RunBuildProgramInBeeEnvironment("dummy.json", Main);
-            return;
-        }
-
         BeeRootValue = AsmDefConfigFile.AsmDefDescriptionFor("Unity.Runtime.EntryPoint").Path.Parent.Parent.Combine("bee~");
 
-        StevedoreGlobalSettings.Instance = new StevedoreGlobalSettings
+        Backend.Current.StevedoreSettings = new StevedoreSettings
         {
             // Manifest entries always override artifact IDs hard-coded in Bee
             // Setting EnforceManifest to true will also ensure no artifacts
@@ -118,9 +111,24 @@ public class BuildProgram
             },
         };
 
-        //The stevedore global manifest will override DownloadableCsc.Csc72 artifacts and use Csc73
-        CSharpProgram.DefaultConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release, DownloadableCsc.Csc72);
+        // When bee needs to run a second time because the Tundra graph has suggested a need to rerun,
+        // you cannot use LazyStatics or Statics in cases where you construct a program that gets compiled in the first run.
+        // This is because previously bee when it ran a second time would spawn a new process of the buildprogram but in the
+        // new bee we actually run it in the same process which means that you need to construct new programs or clear out old state. 
+        TinyIO = null;
+        UnityTinyBurst = null;
 
+        UnityLowLevel = null;
+        ZeroJobs = null;
+        ILPostProcessorAssemblies = null;
+
+        ILPostProcessorTool._ilPostProcessorRunnerProgramInternal = null;
+
+        _cache.Clear();
+        DotsConfigs.Clear();
+
+        CSharpProgram.DefaultConfig = new CSharpProgramConfiguration(CSharpCodeGen.Release);
+        
         PerConfigBuildSettings = DotsConfigs.MakeConfigs();
         foreach (var rootAssemblyName in PerConfigBuildSettings.Keys)
         {
@@ -159,9 +167,8 @@ public class BuildProgram
             HackedFrameworkToUseForProjectFilesIfNecessary);
 
         var nunit = new StevedoreArtifact("nunit-framework");
-        Backend.Current.Register(nunit);
-        NUnitLite = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunitlite.dll"), Framework.Framework40);
-        NUnitFramework = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunit.framework.dll"), Framework.Framework40);
+        NUnitLite = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunitlite.dll"), Framework.Framework471);
+        NUnitFramework = new DotNetAssembly(nunit.Path.Combine("bin", "net40", "nunit.framework.dll"), Framework.Framework471);
 
         BurstCompiler.BurstExecutable = GetBurstExecutablePath(burstAsmDef).QuoteForProcessStart();
 
@@ -191,6 +198,7 @@ public class BuildProgram
 
         var tinyMainAsmDefs = asmDefDescriptions.Where(a=>a.IsTinyRoot);
         var gameAsmDefs = tinyMainAsmDefs.Union(AsmDefConfigFile.TestableAssemblyDefinitions);
+        
         foreach (var gameAsmdef in gameAsmDefs)
         {
             var gameProgram = GetOrMakeDotsRuntimeCSharpProgramFor(gameAsmdef);
@@ -199,23 +207,20 @@ public class BuildProgram
                     GetOrMakeDotsRuntimeCSharpProgramFor(
                         AsmDefConfigFile.AsmDefDescriptionFor("Unity.Runtime.EntryPoint")));
         }
-
         var gamePrograms = gameAsmDefs.Select(SetupGame).ExcludeNulls().ToArray();
 
-        var vs = new VisualStudioSolution
-        {
+
+        var vs = new VisualStudioSolution {
             Path = AsmDefConfigFile.UnityProjectPath.Combine($"{AsmDefConfigFile.ProjectName}-Dots.sln").RelativeTo(NPath.CurrentDirectory),
             DefaultSolutionFolderFor = file => (file.Name.Contains("Unity.") || file.Name == "mscorlib") ? "Unity" : ""
         };
 
         var unityToolsFolder = "Unity/tools";
         var unityILPostProcessorsFolder = "Unity/ILPostProcessing";
-        if (BeeRoot.IsChildOf(AsmDefConfigFile.UnityProjectPath))
-        {
+        if (BeeRoot.IsChildOf(AsmDefConfigFile.UnityProjectPath)) {
             var buildProjRef = new CSharpProjectFileReference("buildprogram.gen.csproj");
             vs.Projects.Add(buildProjRef, unityToolsFolder);
         }
-
         foreach (var gameProgram in gamePrograms)
             vs.Projects.Add(gameProgram);
 
@@ -228,8 +233,7 @@ public class BuildProgram
         foreach (var p in ilPostProcessorPrograms)
             vs.Projects.Add(p, unityILPostProcessorsFolder);
 
-        foreach (var config in PerConfigBuildSettings.SelectMany(entry=>entry.Value))
-        {
+        foreach (var config in PerConfigBuildSettings.SelectMany(entry => entry.Value)) {
             //we want dotnet to be the default, and we cannot have nice things: https://aras-p.info/blog/2017/03/23/How-does-Visual-Studio-pick-default-config/platform/
             var solutionConfigName = config.Identifier == "dotnet" ? "Debug (dotnet)": config.Identifier;
 
@@ -238,12 +242,11 @@ public class BuildProgram
                 var firstOrDefault = configurations.FirstOrDefault(c => c == config);
                 return new Tuple<IProjectConfiguration, bool>(
                     firstOrDefault ?? configurations.First(),
-                    firstOrDefault != null || toolPrograms.Any(t=>t.ProjectFile == file));
+                    firstOrDefault != null || toolPrograms.Any(t => t.ProjectFile == file));
             }));
         }
 
         VisualStudioSolution = vs;
-
         EditorToolsBuildProgram.Setup(BeeRoot);
 
         // Run this before solution setup, to potentially give this a chance to muck with the VisualStudioSolution
@@ -251,8 +254,6 @@ public class BuildProgram
 
         if (!IsRequestedTargetExactlySingleAppSingleConfig())
             Backend.Current.AddAliasDependency("ProjectFiles", vs.Setup());
-
-        WebPBuild.SetupWebPAlias();
     }
 
     private static NPath GetBurstExecutablePath(AsmDefDescription burstAsmDef)
@@ -338,6 +339,7 @@ public class BuildProgram
                 setupGame,
                 config,
                 gameProgram.Defines.For(config).ToArray());
+
             var postTypeRegGenGame = TypeRegistrationTool.SetupInvocation(postILProcessedGame, config);
             configToSetupGame[config] = postTypeRegGenGame;
         }
@@ -486,6 +488,10 @@ public class BuildProgram
 
             if (config.ScriptingBackend == ScriptingBackend.TinyIl2cpp)
             {
+                var tinyShellFileName = "tiny_shell.html";
+                NPath tinyShellPath = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier, "WebTemplate", tinyShellFileName);
+                il2CppOutputProgram.DynamicLinkerSettingsForEmscripten().Add(c => c.WithShellFile(tinyShellPath));
+
                 var builtNativeProgram = il2CppOutputProgram.SetupSpecificConfiguration(
                         config.NativeProgramConfiguration,
                         config.NativeProgramConfiguration.ExecutableFormat
@@ -502,40 +508,74 @@ public class BuildProgram
                         );
                 }
 
-                NPath exportManifest = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier).Combine("export.manifest");
-                if (config.PlatformBuildConfig is WebBuildConfig webBuildConfig && webBuildConfig.SingleFile && exportManifest.FileExists())
+                if (config.PlatformBuildConfig is WebBuildConfig webBuildConfig)
                 {
-                    string htmlPackager = LowLevelRoot.Combine("WebSupport", "package_single_file.js").ToString();
-                    NPath deployedHtmlPath = GameDeployBinaryFor(gameProgram, config);
-                    string htmlPath = (builtNativeProgram as EmscriptenExecutable).Path.ToString();
-                    var dataFiles = exportManifest.MakeAbsolute().ReadAllLines();
-                    Backend.Current.AddAction(
-                        actionName: "Package Single File",
-                        targetFiles: new[] { deployedHtmlPath },
-                        inputs: new[] { htmlPackager, htmlPath }.Concat(dataFiles).Select(d => new NPath(d)).ToArray(),
-                        executableStringFor: TinyEmscripten.NodeExe.ToString().InQuotes(),
-                        commandLineArguments: new[] { htmlPackager.InQuotes(), deployedHtmlPath.ToString().InQuotes(), htmlPath.InQuotes(), exportManifest.ToString().InQuotes() },
-                        allowUnexpectedOutput: false,
-                        allowedOutputSubstrings: new string[] { }
-                    );
-                    deployedGame = new DeployableFile(deployedHtmlPath);
-                    entryPointExecutable = deployedGame.Path;
+                    if (webBuildConfig.SingleFile)
+                    {
+                        deployedGame = new DeployableFile(GameDeployBinaryFor(gameProgram, config));
+                        CopyTool.Instance().Setup(deployedGame.Path, (builtNativeProgram as EmscriptenExecutable).Path);
+                    }
+                    else
+                    {
+                        deployedGame = builtNativeProgram.DeployTo(deployPath);
+                    }
+
+                    var webTemplateFolder = webBuildConfig.WebTemplateFolder;
+                    if (String.IsNullOrEmpty(webTemplateFolder))
+                        webTemplateFolder = LowLevelRoot.Combine("WebSupport", "WebTemplates", "Default").ToString();
+                    if (new NPath(webTemplateFolder).IsRelative)
+                        webTemplateFolder = new NPath("../..").Combine(webTemplateFolder).MakeAbsolute().ToString();
+                    if (!new NPath(webTemplateFolder).Combine(tinyShellFileName).FileExists())
+                        throw new InvalidProgramException($"Web template folder \"{webTemplateFolder}\" doesn't contain \"{tinyShellFileName}\" file.");
+
+                    foreach (var templateFilePath in new NPath(webTemplateFolder).Files(recurse:true))
+                    {
+                        string fileRelativePath = templateFilePath.ToString().Substring(webTemplateFolder.Length + 1);
+                        if (fileRelativePath == tinyShellFileName)
+                        {
+                            NPath shellPackager = LowLevelRoot.Combine("WebSupport", "package_shell_file.js");
+                            NPath tinyShellJS = LowLevelRoot.Combine("WebSupport", "tiny_shell.js");
+                            var inputs = new List<NPath> { TinyEmscripten.NodeExe, shellPackager, templateFilePath, tinyShellJS };
+                            var commandLineArguments = new List<NPath> { shellPackager, tinyShellPath, templateFilePath, tinyShellJS };
+                            NPath exportManifest = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier, "export.manifest");
+                            if (webBuildConfig.SingleFile && exportManifest.FileExists())
+                            {
+                                inputs.Add(exportManifest.MakeAbsolute().ReadAllLines().Select(d => new NPath(d)));
+                                commandLineArguments.Add(exportManifest);
+                            }
+                            Backend.Current.AddAction(
+                                actionName: "Package Shell File",
+                                targetFiles: new NPath[] { tinyShellPath },
+                                inputs: inputs.ToArray(),
+                                executableStringFor: TinyEmscripten.NodeExe.InQuotes(),
+                                commandLineArguments: commandLineArguments.Select(d => d.InQuotes()).ToArray()
+                            );
+                            Backend.Current.AddDependency(deployedGame.Path, tinyShellPath);
+                        }
+                        else if (!templateFilePath.HasExtension("meta"))
+                        {
+                            var targetPath = deployPath.Combine(fileRelativePath);
+                            CopyTool.Instance().Setup(targetPath, templateFilePath);
+                            Backend.Current.AddDependency(deployedGame.Path, targetPath);
+                        }
+                    }
                 }
                 else
                 {
                     deployedGame = builtNativeProgram.DeployTo(deployPath);
-                    entryPointExecutable = deployedGame.Path;
-                    if (config.EnableManagedDebugging && !(builtNativeProgram is IPackagedAppExtension))
-                        Backend.Current.AddDependency(deployedGame.Path, Il2Cpp.CopyIL2CPPMetadataFile(deployPath, setupGame));
                 }
+
+                entryPointExecutable = deployedGame.Path;
+                if (config.EnableManagedDebugging && !(builtNativeProgram is IPackagedAppExtension))
+                    Backend.Current.AddDependency(deployedGame.Path, Il2Cpp.CopyIL2CPPMetadataFile(deployPath, setupGame));
 
                 // make sure http-server gets fetched from stevedore.  this should probably go elsewhere, but this is
                 // a convenient quick hack place.
                 if (config.PlatformBuildConfig is WebBuildConfig)
                 {
                     var httpserver = new StevedoreArtifact("http-server");
-                    Backend.Current.Register(httpserver);
-                    var httpserverpath = httpserver.Path.Combine("bin", "http-server");
+                    httpserver.GenerateUnusualPath();
+                    var httpserverpath = httpserver.GetUnusualPath().Combine("bin", "http-server");
                     Backend.Current.AddDependency(deployedGame.Path, httpserverpath);
                 }
             }

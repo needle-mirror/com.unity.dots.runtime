@@ -4,7 +4,7 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs.LowLevel.Unsafe;
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-using Unity.Development;
+using Unity.Development.JobsDebugger;
 #endif
 using UnityEngine.Assertions;
 
@@ -42,8 +42,10 @@ namespace Unity.Jobs
         // aren't writing to the same indices.
         void PatchMinMax_Gen(JobsUtility.MinMax param);
 #endif
-        // A wrapper around the user's Execute() method. This is called per-worker.
+        // A precursor to the Execute() method. This is called per-worker.
         void PrepareJobAtExecuteTimeFn_Gen(int jobIndex);
+        // A followup to the Execute() method. This is called per-worker.
+        void CleanupJobAfterExecuteTimeFn_Gen();
         // Free memory, performs any cleanup. Happens once after all workers have completed, on the same worker thread
         // as the last one to complete using that worker thread's copy of the job data.
         void CleanupJobFn_Gen();

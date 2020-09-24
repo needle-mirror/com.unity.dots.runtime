@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Bee.Core;
 using NiceIO;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.NativeProgramSupport;
 
 namespace Bee.Toolchain.Extension
 {

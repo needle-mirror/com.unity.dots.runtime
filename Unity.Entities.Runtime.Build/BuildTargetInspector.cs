@@ -1,38 +1,23 @@
 using JetBrains.Annotations;
-using System.Collections.Generic;
+using System;
 using System.Linq;
-using Unity.Build.DotsRuntime;
-using Unity.Properties.UI;
-using UnityEditor.UIElements;
-using UnityEngine.UIElements;
+using Unity.Build.Editor;
+using Unity.Properties.Editor;
+using UnityEngine;
+using BuildTarget = Unity.Build.DotsRuntime.BuildTarget;
 
 namespace Unity.Entities.Runtime.Build
 {
     [UsedImplicitly]
-    sealed class BuildTargetInspector : Inspector<BuildTarget>
+    sealed class BuildTargetInspector : TypeInspector<BuildTarget>
     {
-        PopupField<BuildTarget> m_TargetPopup;
+        public override Func<Type, bool> TypeFilter => type => BuildTarget.AvailableBuildTargets
+            .Where(target => !target.HideInBuildTargetPopup)
+            .Select(target => target.GetType())
+            .Any(target => target == type);
 
-        public override VisualElement Build()
-        {
-            m_TargetPopup = new PopupField<BuildTarget>(GetAvailableTargets(), 0, GetDisplayName, GetDisplayName)
-            {
-                label = DisplayName
-            };
-
-            m_TargetPopup.RegisterValueChangedCallback(evt =>
-            {
-                Target = evt.newValue;
-            });
-            return m_TargetPopup;
-        }
-
-        public override void Update()
-        {
-            m_TargetPopup.SetValueWithoutNotify(Target);
-        }
-
-        static List<BuildTarget> GetAvailableTargets() => BuildTarget.AvailableBuildTargets.Where(target => !target.HideInBuildTargetPopup).ToList();
-        static string GetDisplayName(BuildTarget target) => target.DisplayName;
+        public override Func<Type, string> TypeName => type => TypeConstruction.Construct<BuildTarget>(type).DisplayName;
+        public override Func<Type, string> TypeCategory => type => string.Empty;
+        public override Func<Type, Texture2D> TypeIcon => type => TypeConstruction.Construct<BuildTarget>(type).Icon;
     }
 }

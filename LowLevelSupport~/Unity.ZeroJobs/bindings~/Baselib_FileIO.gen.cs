@@ -286,10 +286,7 @@ namespace Unity.Baselib.LowLevel
         /// If offset points past EOF, will return 0.
         /// </param>
         /// <param name="buffer">Pointer to data to read into.</param>
-        /// <param name="size">
-        /// Size of data to read.
-        /// If 0 is passed, will return 0 bytes read and no error.
-        /// </param>
+        /// <param name="size">Size of data to read.</param>
         /// <returns>Amount of bytes read.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern UInt64 Baselib_FileIO_SyncRead(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt64 size, Baselib_ErrorState* errorState);
@@ -308,10 +305,7 @@ namespace Unity.Baselib.LowLevel
         /// If offset+size goes past end-of-file (EOF), then file will be resized.
         /// </param>
         /// <param name="buffer">Pointer to data to write.</param>
-        /// <param name="size">
-        /// Size of data to write.
-        /// If 0 is passed, will return 0 bytes written and no error.
-        /// </param>
+        /// <param name="size">Size of data to write.</param>
         /// <returns>Amount of bytes written.</returns>
         [DllImport(BaselibNativeLibrary.DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern UInt64 Baselib_FileIO_SyncWrite(Baselib_FileIO_SyncFile file, UInt64 offset, IntPtr buffer, UInt64 size, Baselib_ErrorState* errorState);

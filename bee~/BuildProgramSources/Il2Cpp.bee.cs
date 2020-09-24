@@ -8,8 +8,6 @@ using Bee;
 using Bee.Core;
 using Bee.CSharpSupport;
 using Bee.DotNet;
-using Bee.NativeProgramSupport.Building;
-using Bee.NativeProgramSupport.Building.FluentSyntaxHelpers;
 using Bee.Stevedore;
 using Bee.Toolchain.Emscripten;
 using Bee.Toolchain.GNU;
@@ -19,10 +17,10 @@ using Bee.Toolchain.Windows;
 using Bee.Toolchain.Xcode;
 using Newtonsoft.Json.Linq;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildSystem.NativeProgramSupport;
-using Unity.BuildSystem.VisualStudio;
-using Unity.BuildTools;
+using Bee.NativeProgramSupport;
+using Bee.VisualStudioSolution;
+using Bee.Tools;
+using Bee.Core.Stevedore;
 
 public static class Il2Cpp
 {
@@ -67,12 +65,14 @@ public static class Il2Cpp
     {
         get
         {
+            var distRoot = Distribution.Path.ResolveWithFileSystem();
+
             if (HostPlatform.IsWindows)
-                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/win-x64/publish/il2cpp.exe").ToString().Replace('/', '\\');
+                return distRoot.Combine("build/deploy/netcoreapp3.1/win-x64/publish/il2cpp.exe").ToString().Replace('/', '\\');
             if (HostPlatform.IsOSX)
-                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/osx-x64/publish/il2cpp").ToString();
+                return distRoot.Combine("build/deploy/netcoreapp3.1/osx-x64/publish/il2cpp").ToString();
             if (HostPlatform.IsLinux)
-                return Distribution.Path.Combine("build/deploy/netcoreapp3.0/linux-x64/publish/il2cpp").ToString();
+                return distRoot.Combine("build/deploy/netcoreapp3.1/linux-x64/publish/il2cpp").ToString();
             throw new NotImplementedException("IL2CPP is not built for the host platform");
         }
     }
@@ -81,14 +81,12 @@ public static class Il2Cpp
     private static IFileBundle Il2CppFromSteve()
     {
         var stevedoreArtifact = new StevedoreArtifact("il2cpp");
-        Backend.Current.Register(stevedoreArtifact);
         return stevedoreArtifact;
     }
 
     private static IFileBundle Il2CppDepsFromSteve()
     {
         var stevedoreArtifact = new StevedoreArtifact("MonoBleedingEdgeSub");
-        Backend.Current.Register(stevedoreArtifact);
         return stevedoreArtifact;
     }
 
@@ -107,8 +105,10 @@ public static class Il2Cpp
         {
             AddLibIl2CppAsLibraryFor(this);
 
+            var distRoot = Distribution.Path.ResolveWithFileSystem();
+
             Libraries.Add(BoehmGCProgram);
-            Sources.Add(Distribution.Path.Combine("external").Combine("xxHash/xxhash.c"));
+            Sources.Add(distRoot.Combine("external").Combine("xxHash/xxhash.c"));
 
             this.DynamicLinkerSettingsForMsvc()
                 .Add(l => l.WithSubSystemType(SubSystemType.Console).WithEntryPoint("wWinMainCRTStartup"));
@@ -121,24 +121,21 @@ public static class Il2Cpp
             );
             Defines.Add(c => c.ToolChain.DynamicLibraryFormat == null, "FORCE_PINVOKE_INTERNAL=1");
 
-            this.DynamicLinkerSettingsForEmscripten().Add(c =>
-                c.WithShellFile(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_shell.html")));
-
             this.DynamicLinkerSettingsForAndroid().Add(c =>
                 ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration == DotsConfiguration.Release, l => l.WithStripAll(true));
 
             Libraries.Add(c => c.Platform is WebGLPlatform,new PreJsLibrary(BuildProgram.BeeRoot.Parent.Combine("LowLevelSupport~", "WebSupport", "tiny_runtime.js")));
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER=1");
             Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_DEBUGGER_PORT=56000");
-            
+
             // Remove this comment to enable the managed debugger log file. It will be written to the working directory. For Web builds, the output will go to the browser's console.
             //Defines.Add(ManagedDebuggingIsEnabled, "IL2CPP_MONO_DEBUGGER_LOGFILE=il2cpp-debugger.log");
-            
+
             Defines.Add(c => ((DotsRuntimeNativeProgramConfiguration)c).CSharpConfig.DotsConfiguration != DotsConfiguration.Release, "IL2CPP_TINY_DEBUG_METADATA");
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithExceptions(true));
             CompilerSettings().Add(ManagedDebuggingIsEnabled, c => c.WithRTTI(true));
-            IncludeDirectories.Add(ManagedDebuggingIsEnabled, Distribution.Path.Combine("libil2cpp/pch"));
-            
+            IncludeDirectories.Add(ManagedDebuggingIsEnabled, distRoot.Combine("libil2cpp/pch"));
+
             CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
 
             this.CompilerSettingsForMsvc().Add(c => c.WithWarningPolicies(new [] { new WarningAndPolicy("4102", WarningPolicy.Silent) }));
@@ -149,13 +146,15 @@ public static class Il2Cpp
             NativeJobsPrebuiltLibrary.AddToNativeProgram(this); // Only required for managed debugging
             this.CompilerSettingsForEmscripten().Add(ManagedDebuggingIsEnabled,
                 c => c.WithMultithreading_Compiler(EmscriptenMultithreadingMode.Enabled));
+            this.CompilerSettingsForGccLike().Add(s => s.WithCustomFlags(new[] {"-fno-strict-overflow"}));
         }
 
 
 
         public void SetupConditionalSourcesAndLibrariesForConfig(DotsRuntimeCSharpProgramConfiguration config, DotNetAssembly setupGame)
         {
-            NPath[] il2cppGeneratedFiles = SetupInvocation(setupGame, config);
+            NPath[] il2cppGeneratedFiles = SetupInvocation(setupGame, config).ResolveWithFileSystem();
+
             //todo: stop comparing identifier.
             Sources.Add(npc => ((DotsRuntimeNativeProgramConfiguration)npc).CSharpConfig == config, il2cppGeneratedFiles);
             var staticLibs = setupGame.RecursiveRuntimeDependenciesIncludingSelf.SelectMany(r=>r.Deployables.OfType<StaticLibrary>());
@@ -178,9 +177,9 @@ public static class Il2Cpp
     public static void AddLibIl2CppAsLibraryFor(NativeProgram program)
     {
         program.Libraries.Add(c => !ManagedDebuggingIsEnabled(c), LibIL2Cpp);
-        program.Libraries.Add(ManagedDebuggingIsEnabled, BigLibIL2Cpp);    
+        program.Libraries.Add(ManagedDebuggingIsEnabled, BigLibIL2Cpp);
     }
-    
+
     public static NPath Il2CppTargetDirForAssembly(DotNetAssembly inputAssembly)
     {
         return inputAssembly.Path.Parent.Combine("il2cpp-src");
@@ -196,7 +195,6 @@ public static class Il2Cpp
         var args = new List<string>()
         {
             "--convert-to-cpp",
-            "--disable-cpp-chunks",
 
             //  "--directory", $"{InputAssembly.Path.Parent}",
             "--generatedcppdir",
@@ -243,12 +241,12 @@ public static class Il2Cpp
 
         args.Add($"--entry-assembly-name={inputAssembly.Path.FileNameWithoutExtension}");
 
-        var il2cppInputs = Distribution.GetFileList("build/deploy/net471")
-            .Concat(iarrdis.SelectMany(a => a.Paths))
-            .Concat(new[] {Distribution.Path.Combine("libil2cpptiny", "libil2cpptiny.icalls")});
+        var il2cppInputs = Distribution.GetFileList("build/deploy/net471").ResolveWithFileSystem()
+            .Concat(iarrdis.SelectMany(a => a.Paths.ResolveWithFileSystem()))
+            .Concat(new[] { Distribution.Path.Combine("libil2cpptiny", "libil2cpptiny.icalls") }.ResolveWithFileSystem());
 
         if (new NPath(Il2CppRunnableProgram).Parent.Exists())
-            il2cppInputs = il2cppInputs.Concat(new NPath(Il2CppRunnableProgram).Parent.Files());
+            il2cppInputs = il2cppInputs.Concat(new NPath(Il2CppRunnableProgram).Parent.Files().ResolveWithFileSystem());
 
         Backend.Current.AddAction(
             "Il2Cpp",
@@ -293,7 +291,7 @@ public static class Il2Cpp
                 storage.Add(a);
                 continue;
             }
-            
+
             yield return a;
             foreach (var s in storage)
                 yield return s;
@@ -304,19 +302,15 @@ public static class Il2Cpp
             throw new InvalidProgramException("Couldn't find any assembly with .exe suffix in input list; are you missing an entry point?");
     }
 
-    public static NativeProgram LibIL2Cpp => _libil2cpp.Value;
-    public static NativeProgram BigLibIL2Cpp => _biglibil2cpp.Value;
+    public static NativeProgram LibIL2Cpp { get { return CreateLibIl2CppProgram(useExceptions: false); } }
+    public static NativeProgram BigLibIL2Cpp { get { return CreateLibIl2CppProgram(useExceptions: true, libil2cppname: "libil2cpp"); } }
 
-    static Lazy<NativeProgram> _libil2cpp = new Lazy<NativeProgram>(()=>CreateLibIl2CppProgram(useExceptions: false));
-    static Lazy<NativeProgram> _biglibil2cpp = new Lazy<NativeProgram>(()=>CreateLibIl2CppProgram(useExceptions: true, libil2cppname:"libil2cpp"));
-    
-    public static NativeProgram BoehmGCProgram => _boehmGCProgram.Value;
-    static Lazy<NativeProgram> _boehmGCProgram = new Lazy<NativeProgram>(()=>CreateBoehmGcProgram(Distribution.Path.Combine("external/bdwgc")));
 
+    public static NativeProgram BoehmGCProgram { get { return CreateBoehmGcProgram(Distribution.Path.Combine("external/bdwgc").ResolveWithFileSystem()); } }
 
     static NativeProgram CreateLibIl2CppProgram(bool useExceptions, NativeProgram boehmGcProgram = null, string libil2cppname = "libil2cpptiny")
     {
-        var fileList = Distribution.GetFileList(libil2cppname).ToArray();
+        var fileList = Distribution.GetFileList(libil2cppname).ResolveWithFileSystem().ToArray();
 
         var nPaths = fileList.Where(f => f.HasExtension("cpp")).ToArray();
         var win32Sources = nPaths.Where(p => p.HasDirectory("Win32")).ToArray();
@@ -374,11 +368,11 @@ public static class Il2Cpp
 
         if (libil2cppname == "libil2cpptiny")
         {
-            program.Sources.Add(Distribution.GetFileList("libil2cpp/os"));
-            program.Sources.Add(Distribution.GetFileList("libil2cpp/gc"));
-            program.Sources.Add(Distribution.GetFileList("libil2cpp/utils"));
-            program.Sources.Add(Distribution.GetFileList("libil2cpp/vm-utils"));
-            program.Sources.Add(Distribution.GetFileList("libil2cpp/codegen"));
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/os").ResolveWithFileSystem());
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/gc").ResolveWithFileSystem());
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/utils").ResolveWithFileSystem());
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/vm-utils").ResolveWithFileSystem());
+            program.Sources.Add(Distribution.GetFileList("libil2cpp/codegen").ResolveWithFileSystem());
             program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp"));
             program.PublicIncludeDirectories.Add(Distribution.Path.Combine("libil2cpp", "pch"));
         }
@@ -408,9 +402,9 @@ public static class Il2Cpp
                 Distribution.Path.Combine("libmono/config"),
                 Distribution.Path.Combine("libil2cpp/os/c-api"),
                 Distribution.Path.Combine("libil2cpp/pch"),
-            });
+            }.ResolveWithFileSystem());
 
-            var MonoSourceDir = Distribution.Path.Combine("external/mono");
+            var MonoSourceDir = Distribution.Path.Combine("external/mono").ResolveWithFileSystem();
             program.Sources.Add(ManagedDebuggingIsEnabled,
             new []
             {
@@ -523,9 +517,9 @@ public static class Il2Cpp
         program.PublicDefines.Add("IL2CPP_TINY");
         program.PublicIncludeDirectories.Add(Distribution.Path.Combine("external").Combine("xxHash"));
         program.CompilerSettings().Add(s => s.WithCppLanguageVersion(CppLanguageVersion.Cpp11));
-        
+
         program.CompilerSettingsForGcc().Add(s => s.WithWarningPolicies(GetGccLikeWarningPolicies()));
-        
+
         // Use Baselib headers and library code from the NativeJobs library.
         NativeJobsPrebuiltLibrary.AddToNativeProgram(program);
 
@@ -731,15 +725,15 @@ public static DotNetAssembly SetupLinker(DotNetAssembly inputAssembly, NativePro
 
         static void AddActions(DotNetAssembly[] inputAssemblies, NPath targetDirectory, NativeProgramConfiguration nativeProgramConfiguration)
         {
-            var linkerAssembly = new DotNetAssembly(Distribution.Path.Combine("build/deploy/net471/UnityLinker.exe"), Framework.Framework471);
+            var linkerAssembly = new DotNetAssembly(Distribution.Path.Combine("build/deploy/net471/UnityLinker.exe").ResolveWithFileSystem(), Framework.Framework471);
             var linker = new DotNetRunnableProgram(linkerAssembly);
 
-            
+
             var outputDir = targetDirectory;
             var isFrameworkNone = inputAssemblies.First().Framework == Framework.FrameworkNone;
 
             var rootAssemblies = inputAssemblies.Where(a => a.Path.HasExtension("exe")).Concat(new[]{inputAssemblies.First()}).Distinct();
-            
+
             var linkerArguments = new List<string>
             {
                 $"--out={outputDir.InQuotes()}",
@@ -747,15 +741,15 @@ public static DotNetAssembly SetupLinker(DotNetAssembly inputAssembly, NativePro
                 "--dotnetprofile=" + (isFrameworkNone ? "unitytiny" : "unityaot"),
             };
 
-            linkerArguments.AddRange(rootAssemblies.Select(rootAssembly => $"--include-public-assembly={rootAssembly.Path.InQuotes()}"));
-            
+            linkerArguments.AddRange(rootAssemblies.Select(rootAssembly => $"--include-public-assembly={rootAssembly.Path.InQuotesResolved()}"));
+
             foreach (var inputDirectory in inputAssemblies.Select(f => f.Path.Parent).Distinct())
                 linkerArguments.Add($"--include-directory={inputDirectory.InQuotes()}");
 
             NPath bclDir = Il2CppDependencies.Path.Combine("MonoBleedingEdge/builds/monodistribution/lib/mono/unityaot");
 
             if (!isFrameworkNone)
-                linkerArguments.Add($"--search-directory={bclDir.InQuotes()}");
+                linkerArguments.Add($"--search-directory={bclDir.InQuotesResolved()}");
 
             var targetPlatform = GetTargetPlatformForLinker(nativeProgramConfiguration.Platform);
             if (!string.IsNullOrEmpty(targetPlatform))

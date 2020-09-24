@@ -3,7 +3,8 @@
     "references": [
         "Unity.Tiny.UnityInstance",
         "Unity.Platforms.RunLoop",
-        "Unity.Platforms.Common"
+        "Unity.Platforms.Common",
+        "Unity.Collections"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

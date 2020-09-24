@@ -1,5 +1,6 @@
 using System;
 using Bee.Core;
+using Bee.Core.Stevedore;
 using Bee.Stevedore;
 using NiceIO;
 
@@ -10,7 +11,6 @@ static class StevedoreNewtonsoftJson
     static readonly Lazy<NPath[]> _paths = new Lazy<NPath[]>(() =>
     {
         var newtonsoftJsonArtifact = new StevedoreArtifact("newtonsoft-json");
-        Backend.Current.Register(newtonsoftJsonArtifact);
 
         return new[]
         {

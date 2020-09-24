@@ -4,6 +4,7 @@ using System;
 using static System.Text.Encoding;
 using Unity.Burst;
 using Unity.Baselib.LowLevel;
+using UnityEngine;
 
 namespace Unity.Development.PlayerConnection
 {
@@ -37,8 +38,11 @@ namespace Unity.Development.PlayerConnection
             bufferTls.Data = UIntPtr.Subtract(UIntPtr.Zero, 1);
         }
 
-        public static void Log(string text)
+        public static void Log(string text, LogType type = LogType.Log)
         {
+            if (text.Length == 0)
+                return;
+
             int textBytes = UTF8.GetByteCount(text);
 
             unsafe
@@ -48,12 +52,12 @@ namespace Unity.Development.PlayerConnection
                 fixed (char* t = text)
                 {
                     UTF8.GetBytes(t, text.Length, textBuf, textBytes);
-                    Log(textBuf, textBytes);
+                    Log(textBuf, textBytes, type);
                 }
             }
         }
 
-        public unsafe static void Log(byte* textUtf8, int textBytes)
+        public unsafe static void Log(byte* textUtf8, int textBytes, LogType type = LogType.Log)
         {
             // We have already shutdown, so don't try to use this.
             // This won't detect if we haven't yet initialized, but that's less likely to happen due to
@@ -67,7 +71,7 @@ namespace Unity.Development.PlayerConnection
             var stream = MessageStream;
 
             stream->MessageBegin(EditorMessageIds.kLog);
-            stream->WriteData(textBytes);
+            stream->WriteData((uint)type);
             stream->WriteRaw(textUtf8, textBytes);
             stream->MessageEnd();
         }

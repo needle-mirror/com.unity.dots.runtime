@@ -3,7 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using NiceIO;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.NativeProgramSupport;
+using Bee.Core;
 
 public class AsmRefDescription
 {
@@ -114,6 +115,8 @@ public class AsmDefDescription
             case "WindowsStandalone32":
             case "WindowsStandalone64":
                 return new WindowsPlatform();
+            case "LinuxStandalone64":
+                return new LinuxPlatform();
             case "Editor":
                 if (shouldIgnoreEditorPlatform)
                     return null;

@@ -6,54 +6,57 @@ using Bee.Core;
 using Bee.DotNet;
 using Bee.Tools;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildTools;
+using Bee.CSharpSupport;
 
 static class TypeRegistrationTool
 {
-    private static readonly Lazy<CSharpProgram> _entityBuildUtils = new Lazy<CSharpProgram>(() =>
+    private static CSharpProgram _entityBuildUtils 
     {
-        var program = new CSharpProgram()
-        {
-            FileName = "Unity.Entities.BuildUtils.dll",
-            Sources =
-            {
+        get {
+            var program = new CSharpProgram() {
+                FileName = "Unity.Entities.BuildUtils.dll",
+                Sources =
+                {
                 AsmDefConfigFile.AsmDefDescriptionFor("Unity.Entities.BuildUtils").Path.Parent
                     .Files("*.cs", recurse: true)
             },
-            Unsafe = true,
-            References =
-            {
-                ReferenceAssemblies471.Paths,
+                Framework = { Framework.Framework471 },
+                Unsafe = true,
+                References =
+                {
                 MonoCecil.Paths,
                 Il2Cpp.Distribution.Path.Combine("build/deploy/net471/Unity.Cecil.Awesome.dll"),
             },
-            LanguageVersion = "7.3",
-            ProjectFilePath = "Unity.Entities.BuildUtilities.csproj"
-        };
-        program.SetupDefault();
-        return program;
-    });
+                LanguageVersion = "7.3",
+                ProjectFilePath = "Unity.Entities.BuildUtilities.csproj"
+            };
+            program.SetupDefault();
+            return program;
+        }
+    }
 
-    public static CSharpProgram EntityBuildUtils => _entityBuildUtils.Value;
+    public static CSharpProgram EntityBuildUtils => _entityBuildUtils;
 
-    private static readonly Lazy<DotNetRunnableProgram> _typeRegRunnableProgram = new Lazy<DotNetRunnableProgram>(() =>
+    private static DotNetRunnableProgram _typeRegRunnableProgram 
     {
-        var typeRegGen = TypeRegProgram;
-        return new DotNetRunnableProgram(typeRegGen.SetupDefault());
-    });
+        get {
 
-    public static CSharpProgram TypeRegProgram => _typeRegProgram.Value;
+            var typeRegGen = TypeRegProgram;
+            return new DotNetRunnableProgram(typeRegGen.SetupDefault());
+        }
+    }
 
-    private static readonly Lazy<CSharpProgram> _typeRegProgram = new Lazy<CSharpProgram>(() => new CSharpProgram()
+    public static CSharpProgram TypeRegProgram => _typeRegProgram;
+
+    private static CSharpProgram _typeRegProgram =>  new CSharpProgram()
     {
         FileName = "TypeRegGen.exe",
         Sources = {BuildProgram.BeeRoot.Parent.Combine("TypeRegGen")},
         Unsafe = true,
         Defines = {"NDESK_OPTIONS"},
+        Framework = { Framework.Framework471 },
         References =
         {
-            ReferenceAssemblies471.Paths,
             EntityBuildUtils,
             MonoCecil.Paths,
             StevedoreNewtonsoftJson.Paths,
@@ -61,7 +64,7 @@ static class TypeRegistrationTool
         },
         LanguageVersion = "7.3",
         ProjectFilePath = "TypeRegGen.csproj"
-    });
+    };
 
     public static DotNetAssembly SetupInvocation(
         DotNetAssembly inputAssembly,
@@ -85,13 +88,13 @@ static class TypeRegistrationTool
         }.ToArray();
 
         var inputFiles = inputAssemblies.SelectMany(InputPathsFor)
-            .Concat(new[] {_typeRegRunnableProgram.Value.Path}).ToArray();
+            .Concat(new[] {_typeRegRunnableProgram.Path}).ToArray();
         var targetFiles = inputAssemblies.SelectMany(i => TargetPathsFor(targetDirectory, i)).ToArray();
 
         Backend.Current.AddAction("TypeRegGen",
             targetFiles,
             inputFiles,
-            _typeRegRunnableProgram.Value.InvocationString,
+            _typeRegRunnableProgram.InvocationString,
             args,
             allowedOutputSubstrings: new[] {"Static Type Registry Generation Time:"});
     }

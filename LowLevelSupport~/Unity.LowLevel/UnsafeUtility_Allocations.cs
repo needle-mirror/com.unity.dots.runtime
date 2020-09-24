@@ -6,6 +6,11 @@ namespace Unity.Collections.LowLevel.Unsafe
 {
     public partial class UnsafeUtility
     {
+#if UNITY_WINDOWS
+        public const string nativejobslib = "nativejobs";
+#else
+        public const string nativejobslib = "libnativejobs";
+#endif
 
 #if UNITY_DOTSRUNTIME_TRACEMALLOCS
         private static Dictionary<IntPtr, string> s_Allocs = new Dictionary<IntPtr, string>();
@@ -97,8 +102,29 @@ namespace Unity.Collections.LowLevel.Unsafe
         [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_memmove")]
         public static extern unsafe void MemMove(void* destination, void* source, long size);
 
-        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_freetemp")]
-        public static extern unsafe void FreeTempMemory();
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_enterscope")]
+        public static extern unsafe void EnterTempScope();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_exitscope")]
+        public static extern unsafe void ExitTempScope();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_setscopeuser")]
+        public static extern unsafe void SetTempScopeUser(void* user);
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_getscopeuser")]
+        public static extern unsafe void* GetTempScopeUser();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_reset")]
+        public static extern unsafe void ResetTemp();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_free")]
+        public static extern unsafe void FreeTemp();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_getlocalused")]
+        public static extern unsafe int GetTempUsed();
+
+        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_temp_getlocalcapacity")]
+        public static extern unsafe int GetTempCapacity();
 
         // The CallFunctionPtr_abc methods are used to call static code-gen methods.
         // If we remove the minimal path for ST, these could be removed.
@@ -118,10 +144,10 @@ namespace Unity.Collections.LowLevel.Unsafe
         // We need a shared pointer with Burst; however, lowlevel doesn't have access to Burst to
         // use the typical machinery. Until (if?) that is solved, we need a workaround to pass
         // a static flag to bursted code.
-        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_get_in_job")]
+        [DllImport(nativejobslib, EntryPoint = "unsafeutility_get_in_job")]
         internal static extern int GetInJob();
 
-        [DllImport("lib_unity_lowlevel", EntryPoint = "unsafeutility_set_in_job")]
+        [DllImport(nativejobslib, EntryPoint = "unsafeutility_set_in_job")]
         internal static extern void SetInJob(int inJob);
 
         public static bool IsValidAllocator(Allocator allocator) { return allocator > Allocator.None; }

@@ -1,23 +1,7 @@
-<!doctype html>
-<html lang="en-us">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=0">
-</head>
-<div id="waitForManagedDebugger" style="display:none">
-	<h1 style="text-align:center;">
-		<div id="waitForManagedDebuggerMessage"></div>
-		<button onclick="doneWaitingForDebugger()">Continue</button>
-	</h1>
-</div>
-<body style="margin:0px; border:none; overflow:hidden; display:block;">
-<div id="error_log"></div>
-<canvas id="UT_CANVAS" tabindex="1" style='display:block; touch-action:none;'></canvas>
-<script>
 #if !MODULARIZE || MODULARIZE_INSTANCE
   var Module = {
 #if USE_PTHREADS
-    worker: '{{{ PTHREAD_WORKER_FILE }}}'
+    worker: '{{{ PTHREAD_WORKER_FILE }}}' + location.search
 #endif
 };
 #endif
@@ -137,7 +121,3 @@ TinyEventManager.addEventListener('keyup', keyEvent);
 {{{ JS_CONTENTS_IN_SINGLE_FILE_BUILD }}}
 
 #endif
-
-</script>
-</body>
-</html>

@@ -6,7 +6,8 @@ using Bee.Stevedore;
 using Bee.Toolchain.VisualStudio;
 using JetBrains.Annotations;
 using NiceIO;
-using Unity.BuildSystem.NativeProgramSupport;
+using Bee.NativeProgramSupport;
+using Bee.Core.Stevedore;
 
 public static class NativeJobsPrebuiltLibrary
 {
@@ -19,7 +20,6 @@ public static class NativeJobsPrebuiltLibrary
         if (!ArtifactPaths.ContainsKey(name))
         {
             var artifact = new StevedoreArtifact(name);
-            Backend.Current.Register(artifact);
             ArtifactPaths[name] = artifact.Path;
         }
 

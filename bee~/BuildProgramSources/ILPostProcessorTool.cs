@@ -7,18 +7,20 @@ using Bee.CSharpSupport;
 using Bee.DotNet;
 using Bee.Tools;
 using NiceIO;
-using Unity.BuildSystem.CSharpSupport;
-using Unity.BuildTools;
 
 static class ILPostProcessorTool
 {
-    private static readonly Lazy<DotNetRunnableProgram> _ILPostProcessorRunnableProgram = new Lazy<DotNetRunnableProgram>(() =>
-    {
-        return new DotNetRunnableProgram(ILPostProcessorRunnerProgram.SetupSpecificConfiguration(DotsConfigs.HostDotnet));
-    });
+    private static DotNetRunnableProgram _ILPostProcessorRunnableProgram => new DotNetRunnableProgram(ILPostProcessorRunnerProgram.SetupSpecificConfiguration(DotsConfigs.HostDotnet));
 
-    public static CSharpProgram ILPostProcessorRunnerProgram => _ilPostProcessorRunnerProgram.Value;
-    private static readonly Lazy<CSharpProgram> _ilPostProcessorRunnerProgram = new Lazy<CSharpProgram>(() =>
+    public static CSharpProgram _ilPostProcessorRunnerProgramInternal;
+    public static CSharpProgram ILPostProcessorRunnerProgram { get {
+            if (_ilPostProcessorRunnerProgramInternal == null)
+                _ilPostProcessorRunnerProgramInternal = _ilPostProcessorRunnerProgram();
+
+            return _ilPostProcessorRunnerProgramInternal;
+    } }
+
+    private static CSharpProgram _ilPostProcessorRunnerProgram()
     {
         var ilppRunnerDir = BuildProgram.BeeRoot.Parent.Combine("ILPostProcessing~/ILPostProcessorRunner");
 
@@ -32,11 +34,11 @@ static class ILPostProcessorTool
                 if ((asm.Path.FileNameWithoutExtension != "mscorlib" &&
                      asm.Path.FileNameWithoutExtension != "netstandard") &&
                     asm.Path.FileNameWithoutExtension != BuildProgram.UnityCompilationPipeline.Path.FileNameWithoutExtension)
-                    assemblyReferences.Add(asm.Path);
+                    assemblyReferences.Add(asm.Path.ResolveWithFileSystem());
             }
         }
 
-        var commandlineAsm = new DotNetAssembly(ilppRunnerDir.Combine("thirdparty/CommandLine.dll"), Framework.Framework461);
+        var commandlineAsm = new DotNetAssembly(ilppRunnerDir.Combine("thirdparty/CommandLine.dll"), Framework.Framework46);
 
         var ilPostProcessorRunner = new CSharpProgram()
         {
@@ -55,7 +57,7 @@ static class ILPostProcessorTool
         };
 
         return ilPostProcessorRunner;
-    });
+    }
 
     public static DotNetAssembly SetupInvocation(
         DotNetAssembly inputAssembly,
@@ -69,17 +71,15 @@ static class ILPostProcessorTool
 
     private static void AddActions(CSharpProgramConfiguration config, DotNetAssembly[] inputAssemblies, NPath targetDirectory, string[] defines)
     {
-        var processors = BuildProgram.ILPostProcessorAssemblies.Select(asm => asm.Path.MakeAbsolute());
+        var processors = BuildProgram.ILPostProcessorAssemblies.Select(asm => asm.Path.MakeAbsolute().ResolveWithFileSystem());
         var outputDirArg = "--outputDir " + targetDirectory.MakeAbsolute().QuoteForProcessStart();
         var processorPathsArg = processors.Count() > 0 ? "--processors " + processors.Select(p => p.QuoteForProcessStart()).Aggregate((s1, s2) => s1 + "," + s2) : "";
 
-        var referenceAssemblyProvider = ReferenceAssemblyProvider.Default;
-
         foreach (var inputAsm in inputAssemblies.OrderByDependencies())
         {
-            var assemblyArg = inputAsm.Path.MakeAbsolute().QuoteForProcessStart();
+            var assemblyArg = inputAsm.Path.ResolveWithFileSystem().MakeAbsolute().QuoteForProcessStart();
             var referenceAsmPaths = inputAsm.RuntimeDependencies.Where(a => !a.Path.IsChildOf("post_ilprocessing"))
-                .Select(a => a.Path.MakeAbsolute());
+                .Select(a => a.Path.MakeAbsolute().ResolveWithFileSystem());
 
             var dotsConfig = (DotsRuntimeCSharpProgramConfiguration)config;
 
@@ -90,15 +90,15 @@ static class ILPostProcessorTool
                         referenceAsmPaths = referenceAsmPaths.Concat(
                             new[]
                             {
-                                Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll"),
-                                Il2Cpp.TinyCorlib.Path
+                                Il2Cpp.Distribution.Path.Combine("build/profiles/Tiny/Facades/netstandard.dll").ResolveWithFileSystem(),
+                                Il2Cpp.TinyCorlib.Path.ResolveWithFileSystem()
                             });
                         break;
                     }
 
                 case TargetFramework.NetStandard20:
                     {
-                        NPath bclDir = Il2Cpp.Il2CppDependencies.Path.Combine("MonoBleedingEdge/builds/monodistribution/lib/mono/unityaot");
+                        NPath bclDir = Il2Cpp.Il2CppDependencies.Path.Combine("MonoBleedingEdge/builds/monodistribution/lib/mono/unityaot").ResolveWithFileSystem();
                         referenceAsmPaths = referenceAsmPaths.Concat(new[] { bclDir.Combine("mscorlib.dll"), bclDir.Combine("Facades/netstandard.dll") });
                         break;
                     }
@@ -110,8 +110,8 @@ static class ILPostProcessorTool
             var referencesArg = referenceAsmPaths.Any() ? "--assemblyReferences " + referenceAsmPaths.Select(r => r.MakeAbsolute().QuoteForProcessStart()).Distinct().Aggregate((s1, s2) => s1 + "," + s2) : string.Empty;
             var allscriptDefines = dotsConfig.Defines.Concat(defines);
             var definesArg = !allscriptDefines.Empty() ? "--scriptingDefines " + allscriptDefines.Distinct().Aggregate((d1, d2) => d1 + "," + d2) : "";
-            var targetFiles = TargetPathsFor(targetDirectory, inputAsm).ToArray();
-            var inputFiles = InputPathsFor(inputAsm).Concat(processors).Concat(new[] { _ILPostProcessorRunnableProgram.Value.Path }).Concat(referenceAsmPaths).ToArray();
+            var targetFiles = TargetPathsFor(targetDirectory, inputAsm).ResolveWithFileSystem().ToArray();
+            var inputFiles = InputPathsFor(inputAsm).Concat(processors).Concat(new[] { _ILPostProcessorRunnableProgram.Path }).Concat(referenceAsmPaths).ResolveWithFileSystem().ToArray();
 
             var args = new List<string>
             {
@@ -125,7 +125,7 @@ static class ILPostProcessorTool
             Backend.Current.AddAction($"ILPostProcessorRunner",
                 targetFiles,
                 inputFiles,
-                _ILPostProcessorRunnableProgram.Value.InvocationString,
+                _ILPostProcessorRunnableProgram.InvocationString,
                 args,
                 allowedOutputSubstrings: new[] { "ILPostProcessorRunner", "[WARN]", "[ERROR]" }
             );
