@@ -1,7 +1,7 @@
 {
   "name": "com.unity.dots.runtime",
   "displayName": "DOTS Runtime",
-  "version": "0.31.0-preview.23",
+  "version": "0.31.0-preview.24",
   "unity": "2020.1",
   "description": "This package provides base support for DOTS Runtime",
   "keywords": [
@@ -16,11 +16,11 @@
   },
   "unityRelease": "0b15",
   "upmCi": {
-    "footprint": "3725bd43be721aa3041262637737bfc6d5a6c6fb"
+    "footprint": "6de384c4376188fe7f35169a54727bdf8e5c6390"
   },
   "repository": {
     "url": "https://github.com/Unity-Technologies/dots.git",
     "type": "git",
-    "revision": "e36850610d08c24304ff897f7197dd017904b2a1"
+    "revision": "de497b67a438b8d3251ec156c070239bb3d29fa5"
   }
 }

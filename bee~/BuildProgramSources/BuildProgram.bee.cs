@@ -536,12 +536,13 @@ public class BuildProgram
                             NPath shellPackager = LowLevelRoot.Combine("WebSupport", "package_shell_file.js");
                             NPath tinyShellJS = LowLevelRoot.Combine("WebSupport", "tiny_shell.js");
                             var inputs = new List<NPath> { TinyEmscripten.NodeExe, shellPackager, templateFilePath, tinyShellJS };
-                            var commandLineArguments = new List<NPath> { shellPackager, tinyShellPath, templateFilePath, tinyShellJS };
+                            var commandLineArguments = new List<string> { shellPackager.ToString(), "--outputHtml", tinyShellPath.ToString(), "--inputShellHtml", templateFilePath.ToString(), "--inputShellJs", tinyShellJS.ToString() };
                             NPath exportManifest = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier, "export.manifest");
                             if (webBuildConfig.SingleFile && exportManifest.FileExists())
                             {
                                 inputs.Add(exportManifest.MakeAbsolute().ReadAllLines().Select(d => new NPath(d)));
-                                commandLineArguments.Add(exportManifest);
+                                NPath assetRootDirectory = new NPath(new NPath(gameProgram.FileName).FileNameWithoutExtension).Combine(config.Identifier);
+                                commandLineArguments.AddRange(new List<string> { "--assetRootDirectory", assetRootDirectory.ToString(), "--assetManifest", exportManifest.ToString() });
                             }
                             Backend.Current.AddAction(
                                 actionName: "Package Shell File",
