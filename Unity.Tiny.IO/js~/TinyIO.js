@@ -1,6 +1,7 @@
 mergeInto(LibraryManager.library, {
 #if SINGLE_FILE
     js_fetch_embedded__proxy: 'sync',
+    js_fetch_embedded__sig: 'iiii',
     js_fetch_embedded: function (url, ppData, pLen) {
         var asset = SINGLE_FILE_ASSETS[UTF8ToString(url)];
         if (!asset)

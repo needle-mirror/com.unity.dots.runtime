@@ -1,4 +1,4 @@
-using System.IO;
+using Unity.Build;
 using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
 using Unity.Build.Editor;
@@ -11,20 +11,23 @@ namespace Unity.Entities.Runtime.Build
     {
         const string k_CreateBuildConfigurationAssetDotsRuntime = BuildConfigurationMenuItem.k_BuildConfigurationMenu + "DOTS Runtime Build Configuration";
 
-        [MenuItem(k_CreateBuildConfigurationAssetDotsRuntime, true)]
-        static bool CreateBuildConfigurationAssetDotsRuntimeValidation()
-        {
-            return Directory.Exists(AssetDatabase.GetAssetPath(Selection.activeObject));
-        }
-
         [MenuItem(k_CreateBuildConfigurationAssetDotsRuntime)]
         static void CreateBuildConfigurationAssetDotsRuntime()
         {
-            Selection.activeObject = BuildConfigurationMenuItem.CreateAssetInActiveDirectory("DotsRuntime",
+            var newAsset = BuildConfigurationMenuItem.CreateAssetInActiveDirectory("DotsRuntime", GetDefaultComponents());
+            if (newAsset != null && newAsset)
+                ProjectWindowUtil.ShowCreatedAsset(newAsset);
+        }
+
+        static IBuildComponent[] GetDefaultComponents()
+        {
+            return new IBuildComponent[]
+            {
                 new GeneralSettings(),
                 new SceneList(),
                 new ConversionSystemFilterSettings(),
-                new DotsRuntimeBuildProfile());
+                new DotsRuntimeBuildProfile()
+            };
         }
     }
 }

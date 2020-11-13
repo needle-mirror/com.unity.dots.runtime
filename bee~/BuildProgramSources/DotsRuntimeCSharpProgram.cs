@@ -290,6 +290,15 @@ public class DotsRuntimeCSharpProgram : CSharpProgram
         DotsRuntimeCSharpProgramCustomizer.RunAllCustomizersOn(this);
     }
 
+    public override BeeBuildCommand BeeBuildCommandFor(CSharpProgramConfiguration config)
+    {
+        if (config is DotsRuntimeCSharpProgramConfiguration drcspc)
+        {
+            return new BeeBuildCommand(drcspc.Identifier);
+        }
+        return base.BeeBuildCommandFor(config);
+    }
+
     public virtual bool IsSupportedFor(CSharpProgramConfiguration config)
     {
         if (config is DotsRuntimeCSharpProgramConfiguration dotsConfig)

@@ -1680,6 +1680,12 @@ namespace Unity.ZeroPlayer
                 var fieldType = resolver.ResolveFieldType(field);
                 var resolvedFieldType = fieldType.Resolve();
 
+                // Best effort. Even if the type contains a generic parameter we might be able to find safety handles in the generic
+                // type since we know AtomicSafetyHandle and DisposeSentinel are not generic. However we of course cannot statically look inside
+                // the generic parameter T for safety handles -- such a solution will require runtime type lookups to a static table to safety offsets
+                if (resolvedFieldType == null && fieldType.ContainsGenericParameter)
+                    continue;
+
                 if (m_TypesSupportingDeferredConvertListToArray.TryGetValue(resolvedFieldType, out var patchMethod))
                 {
                     var importedFieldPath = fieldPath.ImportReferencesIntoAndMakeFieldPathPublic(asm);
@@ -2170,7 +2176,8 @@ namespace Unity.ZeroPlayer
                                     $"[NativeContainerIsAtomicWriteOnly] and [NativeContainerSupportsMinMaxWriteRestriction] are both specified on '{fieldDef.FullName}'");
                             }
 
-                            bool disableParallelForRestriction = fieldTypeDef.HasNamedAttribute("NativeDisableParallelForRestriction");
+                            // Get the field's type and check the field itself to see if parallelFor validation has been disabled
+                            bool disableParallelForRestriction = fieldTypeDef.HasNamedAttribute("NativeDisableParallelForRestriction") || fieldDef.HasNamedAttribute("NativeDisableParallelForRestriction");
                             if (!readOnly && !disableSafety && !atomicWriteOnly && !supportsMinMaxWriteRestriction && !disableParallelForRestriction)
                                 writeErrorIfParallel = true;
                         }

@@ -72,8 +72,7 @@ namespace Unity.Jobs.LowLevel.Unsafe
     public enum ScheduleMode : int
     {
         Run = 0,
-        // Deprecate when we add compelete 2020.2 Jobs API support
-        // [Obsolete("Batched is obsolete, use Parallel or Single depending on job type. (UnityUpgradable) -> Parallel", false)]
+        // Deprecate when we add compelete 2020.2 Jobs API support :: ("Batched is obsolete, use Parallel or Single depending on job type. (UnityUpgradable) -> Parallel", false)]
         Batched = 1,
         Parallel = 1,
         Single = 2,                   // Unused in DOTS Runtime currently
@@ -300,7 +299,9 @@ namespace Unity.Jobs.LowLevel.Unsafe
         public unsafe delegate void ManagedJobForEachDelegate(void* ptr, int jobIndex);
         public unsafe delegate void ManagedJobMarshalDelegate(void* dst, void* src);
 
-        static private ReflectionDataStore reflectionDataStoreRoot = null;
+        static class Managed {
+            public static ReflectionDataStore reflectionDataStoreRoot = null;
+        }
 
 #if UNITY_WINDOWS
         internal const string nativejobslib = "nativejobs";
@@ -317,7 +318,9 @@ namespace Unity.Jobs.LowLevel.Unsafe
             s_JobWorkerCount.Data = Environment.ProcessorCount < 8 ? Environment.ProcessorCount : 8;
             s_JobQueue.Data = CreateJobQueue((IntPtr)UnsafeUtility.AddressOf(ref JobQueueName[0]), (IntPtr)UnsafeUtility.AddressOf(ref WorkerThreadName[0]), JobWorkerCount);
             s_BatchScheduler.Data = CreateJobBatchScheduler();
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.AtomicSafetyHandle_SetBatchScheduler((void*)s_BatchScheduler.Data);
+#endif
 #endif
         }
 
@@ -326,7 +329,9 @@ namespace Unity.Jobs.LowLevel.Unsafe
 #if !UNITY_SINGLETHREADED_JOBS
             if (s_BatchScheduler.Data != IntPtr.Zero)
             {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
                 AtomicSafetyHandle.AtomicSafetyHandle_SetBatchScheduler(null);
+#endif
                 DestroyJobBatchScheduler(s_BatchScheduler.Data);
                 s_BatchScheduler.Data = IntPtr.Zero;
             }
@@ -530,8 +535,8 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
             // Protect against garbage collector relocating delegate
             ReflectionDataStore store = new ReflectionDataStore(executeDelegate, codegenCleanupDelegate, codegenExecuteDelegate, codegenMarshalToBurstDelegate);
-            store.next = reflectionDataStoreRoot;
-            reflectionDataStoreRoot = store;
+            store.next = Managed.reflectionDataStoreRoot;
+            Managed.reflectionDataStoreRoot = store;
 
             reflectionData.ExecuteFunctionPtr = store.CodeGenExecuteFunctionPtr;
             if (codegenCleanupDelegate != null)
@@ -741,13 +746,19 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
                         // In the single threaded case, this is synchronous execution.
                         UnsafeUtility.EnterTempScope();
-                        UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+                        try
+                        {
+                            UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
-                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
+                            CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
 
-                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
-                        UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
-                        UnsafeUtility.ExitTempScope();
+                            UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
+                            UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), unmanagedJobData);
+                        }
+                        finally
+                        {
+                            UnsafeUtility.ExitTempScope();
+                        }
                     }
                     else
 #endif
@@ -756,9 +767,15 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
                         // In the single threaded case, this is synchronous execution.
                         UnsafeUtility.EnterTempScope();
-                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
-                        UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
-                        UnsafeUtility.ExitTempScope();
+                        try
+                        {
+                            UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
+                            UnsafeUtility.CallFunctionPtr_p(jobReflectionData.CleanupFunctionPtr.ToPointer(), managedJobDataPtr);
+                        }
+                        finally
+                        {
+                            UnsafeUtility.ExitTempScope();
+                        }
                     }
                 }
                 finally
@@ -881,15 +898,20 @@ namespace Unity.Jobs.LowLevel.Unsafe
                         void* src = (byte*) managedJobDataPtr + sizeof(JobMetaData);
 
                         UnsafeUtility.EnterTempScope();
+                        try
+                        {
+                            UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
 
-                        UnsafeUtility.CallFunctionPtr_pp(jobReflectionData.MarshalToBurstFunctionPtr.ToPointer(), dst, src);
+                            // In the single threaded case, this is synchronous execution.
+                            // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
+                            CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
 
-                        // In the single threaded case, this is synchronous execution.
-                        // The cleanup *is* bursted, so pass in the unmanangedJobDataPtr
-                        CopyMetaDataToJobData(ref jobMetaData, managedJobDataPtr, unmanagedJobData);
-
-                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
-                        UnsafeUtility.ExitTempScope();
+                            UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), unmanagedJobData, k_MainThreadWorkerIndex);
+                        }
+                        finally
+                        {
+                            UnsafeUtility.ExitTempScope();                              
+                        }
                     }
                     else
 #endif
@@ -898,8 +920,14 @@ namespace Unity.Jobs.LowLevel.Unsafe
 
                         // In the single threaded case, this is synchronous execution.
                         UnsafeUtility.EnterTempScope();
-                        UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
-                        UnsafeUtility.ExitTempScope();
+                        try
+                        {
+                            UnsafeUtility.CallFunctionPtr_pi(jobReflectionData.ExecuteFunctionPtr.ToPointer(), managedJobDataPtr, k_MainThreadWorkerIndex);
+                        }
+                        finally
+                        {
+                            UnsafeUtility.ExitTempScope();
+                        }
                     }
                 }
                 finally

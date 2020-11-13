@@ -100,21 +100,9 @@ TinyEventManager.addEventListener('keyup', keyEvent);
   var SINGLE_FILE_ASSETS = {};
 
 #if WASM2JS
-  // when building asmjs, the default base64Decode() function is not available
-  var base64Lookup = new Uint8Array(0x7B);
-  for (var i = 0; i < base64Lookup.length; i++)
-    base64Lookup[i] = i >= 0x61 ? i - 0x47 : i >= 0x41 ? i - 0x41 : i >= 0x30 ? i + 4 : i == 0x2B ? 0x3E : 0x3F;
-
-  function base64Decode(base64) {
-    var output = new Uint8Array((base64.length * 3 >> 2) - (base64[base64.length - 1] == '=') - (base64[base64.length - 2] == '='));
-    for (var j = 0, i = 0; i < base64.length; i += 4) {
-      var b = base64Lookup[base64.charCodeAt(i)] << 18 | base64Lookup[base64.charCodeAt(i + 1)] << 12 | base64Lookup[base64.charCodeAt(i + 2)] << 6 | base64Lookup[base64.charCodeAt(i + 3)];
-      output[j++] = b >> 16;
-      output[j++] = b >> 8;
-      output[j++] = b;
-    }
-    return output;
-  }
+  // when building wasm2js, the default base64Decode() function is not embedded by default
+  // by Emscripten, so embed it explicitly.
+#include "base64Decode.js"
 #endif
 
 // If we are doing a SINGLE_FILE=1 build, inlined JS runtime code follows here:

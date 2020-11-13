@@ -4,6 +4,28 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2020-11-13
+
+### Added
+
+* `UnityInstance` was removed from com.unity.tiny and added to com.unity.dots.runtime.
+
+### Changed
+
+* Upgraded burst to 1.4.1.
+* Upgraded com.unity.platforms to 0.9.0-preview.12.
+* Update minimum editor version to 2020.1.2f1
+* Added partial job safety support for generic job types. Generic Jobs will now have all non-generic parameter fields be validated as non-generic jobs would normally. We however still do not validate safety for container types that are included in a job via a generic parameter field (e.g. `struct MyJob<T> : IJob { public T m_WontBeChecked; }`).
+* Updated platform packages to version `0.10.0-preview.1`.
+
+### Fixed
+
+* Selected configurations in the "Generate DOTS C# Solution" window would be ignored if the row was collapsed. They are now properly recognized as selected.
+* All opened scenes are saved before making a build
+* Move all editor logs (conversion logs, SceneExportLog.txt, BuildLog.txt, UnityShaderCompiler.log ) to the Unity Logs folder.
+
+
+
 ## [0.31.0] - 2020-09-24
 
 ### Added

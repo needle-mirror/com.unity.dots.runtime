@@ -62,6 +62,14 @@ public class AsmDefCSharpProgram : DotsRuntimeCSharpProgram
         if (BuildProgram.TinyIO != null)
             References.Add(BuildProgram.TinyIO);
 
+        // Add in any precompiled references found in the asmdef directory or sub-directory
+        foreach(var pcr in asmDefDescription.PrecompiledReferences)
+        {
+            var files = asmDefDescription.Path.Parent.Files(pcr, true);
+            if (files.Any())
+                References.Add(files);
+        }
+
         if (IsTestAssembly)
         {
             var nunitLiteMain = BuildProgram.BeeRoot.Combine("CSharpSupport/NUnitLiteMain.cs");

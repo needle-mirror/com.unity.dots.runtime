@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using GameObjectConversion;
 using Unity.Build;
 using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
@@ -9,7 +10,9 @@ using Unity.Collections;
 using Unity.Scenes;
 using Unity.Scenes.Editor;
 using UnityEditor;
-using UnityEngine;
+using UnityEditor.SceneManagement;
+using UnityEngine.SceneManagement;
+using LogType = GameObjectConversion.LogType;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -41,19 +44,28 @@ namespace Unity.Entities.Runtime.Build
             var scenePaths = buildScenes.GetScenePathsForBuild();
             var buildConfigurationGuid = context.BuildConfigurationAssetGUID;
             var dataDirectory = WorldExport.GetOrCreateDataDirectoryFrom(rootAssembly.StagingDirectory.Combine(targetName));
+            var logsDirectory = WorldExport.GetOrCreateLogDirectoryFrom(targetName);
 
             var sceneGuids = scenePaths.SelectMany(scenePath =>
             {
-                List<Hash128> guids = SceneMetaDataImporter.GetSubSceneGuids(AssetDatabase.AssetPathToGUID(scenePath)).ToList();
-                guids.Add(new Hash128(AssetDatabase.AssetPathToGUID(scenePath)));
+                var guids = EditorEntityScenes.GetSubScenes(AssetDatabaseCompatibility.PathToGUID(scenePath)).ToList();
+                guids.Add(AssetDatabaseCompatibility.PathToGUID(scenePath));
                 return guids;
             }).Distinct().ToList();
+
+            //Save all unsaved scenes of the project first
+            foreach (var guid in sceneGuids)
+            {
+                string scenePath = AssetDatabase.GUIDToAssetPath(guid.ToString());
+                var scene = SceneManager.GetSceneByPath(scenePath);
+                EditorSceneManager.SaveScene(scene);
+            }
 
             var requiresRefresh = false;
             var sceneBuildConfigGuids = new NativeArray<GUID>(sceneGuids.Count, Allocator.TempJob);
             for (int i=0;i != sceneBuildConfigGuids.Length;i++)
             {
-                sceneBuildConfigGuids[i] = SceneWithBuildConfigurationGUIDs.EnsureExistsFor(sceneGuids[i], new Hash128(buildConfigurationGuid), out var thisRequiresRefresh);
+                sceneBuildConfigGuids[i] = SceneWithBuildConfigurationGUIDs.EnsureExistsFor(sceneGuids[i], new Hash128(buildConfigurationGuid), false, out var thisRequiresRefresh);
                 requiresRefresh |= thisRequiresRefresh;
             }
             if (requiresRefresh)
@@ -91,10 +103,10 @@ namespace Unity.Entities.Runtime.Build
                     }
                     else if (ext == EntityScenesPaths.GetExtension(EntityScenesPaths.PathType.EntitiesConversionLog))
                     {
-                        var destinationFile = dataDirectory.FullName + Path.DirectorySeparatorChar + EntityScenesPaths.RelativePathFolderFor(sceneGuid, EntityScenesPaths.PathType.EntitiesConversionLog, -1);
+                        var destinationFile = logsDirectory.FullName + Path.DirectorySeparatorChar + $"{sceneGuid}.{EntityScenesPaths.GetExtension(EntityScenesPaths.PathType.EntitiesConversionLog)}";
                         new NPath(artifactPath).MakeAbsolute().Copy(new NPath(destinationFile).MakeAbsolute().EnsureParentDirectoryExists());
-                        exportedFiles.Add(new FileInfo(destinationFile));
-                        if (!CheckConversionLog(artifactPath))
+                        var result = PrintConversionLogToUnityConsole(artifactPath);
+                        if (result.HasError || result.HasException)
                         {
                             UnityEngine.Debug.LogError("Failed to export scene: " + Path.GetFileName(AssetDatabase.GUIDToAssetPath(sceneGuid.ToString())));
                             succeeded = false;
@@ -172,48 +184,28 @@ namespace Unity.Entities.Runtime.Build
             builder.Dispose();
         }
 
-        static readonly string[] s_FilteredLogType =
+        (bool HasError, bool HasException) PrintConversionLogToUnityConsole(string conversionLogPath)
         {
-            LogType.Log.ToString(),
-            LogType.Warning.ToString(),
-            LogType.Error.ToString(),
-            LogType.Exception.ToString(),
-            LogType.Assert.ToString()
-        };
-
-        static bool CheckConversionLog(string artifactPath)
-        {
-            bool validLog = true;
-            using (var reader = new StreamReader(artifactPath))
+            bool hasException = false;
+            bool hasError = false;
+            foreach (var (type, content) in ConversionLogUtils.ParseConversionLog(conversionLogPath))
             {
-                var line = "";
-                while ((line = reader.ReadLine()) != null)
+                switch (type)
                 {
-                    var prefixLog = line.Split(':')[0];
-                    if (prefixLog.Contains(LogType.Error.ToString()))
-                    {
-                        Debug.LogError(line);
-                        validLog = false;
-                    }
-                    else if(prefixLog.Contains(LogType.Exception.ToString()))
-                    {
-                        string message = line + "\n";
-                        while ((line = reader.ReadLine()) != null)
-                        {
-                            var prefixExc = line.Split(':')[0];
-                            if (!s_FilteredLogType.Any(s => prefixExc.StartsWith(s)))
-                                message += line + "\n";
-                            else
-                                break;
-                        }
-                        Debug.LogError(message);
-                        validLog = false;
-                    }
-                    else if(prefixLog.Contains(LogType.Warning.ToString()))
-                        Debug.LogWarning(line);
+                    case LogType.Warning:
+                        Debug.LogWarning(content);
+                        break;
+                    case LogType.Error:
+                        Debug.LogError(content);
+                        hasError = true;
+                        break;
+                    case LogType.Exception:
+                        Debug.LogError(content);
+                        hasException = true;
+                        break;
                 }
             }
-            return validLog;
+            return (hasError, hasException);
         }
     }
 }

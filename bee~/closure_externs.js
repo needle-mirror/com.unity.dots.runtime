@@ -27,3 +27,10 @@ var fatal = function(msg) {};
  * @suppress {duplicate, undefinedVars}
  */
 var TinyEventManager = {};
+
+// TODO: Current WebPDecoder is built with Node.js command line support enabled, which throws off Closure compiler as it does not
+// understand Node.js target (we are not building for Node.js.
+/**
+ * @suppress {duplicate, undefinedVars}
+ */
+var process = {};

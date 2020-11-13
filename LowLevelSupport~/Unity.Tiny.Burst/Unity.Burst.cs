@@ -44,6 +44,12 @@ namespace Unity.Burst
             [DllImport("lib_unity_tiny_burst")]
             public static extern unsafe void* GetOrCreateSharedMemory(ref Hash128 subKey, uint sizeOf, uint alignment);
         }
+
+        public static class DotsRuntime
+        {
+            [DllImport("lib_unity_tiny_burst", EntryPoint = "BurstInit", CallingConvention = CallingConvention.StdCall)]
+            public static unsafe extern void Init(IntPtr rethrowPtr);
+        }
     }
 
     //why is this not in the burst package!?

@@ -48,8 +48,13 @@ namespace Unity.Development.Profiling
 
     public class PlayerConnectionProfiler
     {
-        private static bool init = false;
-        private static ProfilerMemoryRecordMode memoryRecordMode = ProfilerMemoryRecordMode.RecordNone;
+        // Since the properties like Enabled are used from Burst, all the static fields
+        // here have to be either Burstable or in another class:
+        static class Managed
+        {
+            public static bool init = false;
+            public static ProfilerMemoryRecordMode memoryRecordMode = ProfilerMemoryRecordMode.RecordNone;
+        }
 
         public static bool Enabled => Mode != ProfilerModes.ProfileDisabled;
         public unsafe static ProfilerModes Mode => mode.UnsafeDataPointer == null ? ProfilerModes.ProfileDisabled : mode.Data;
@@ -57,7 +62,7 @@ namespace Unity.Development.Profiling
 
         public static unsafe void Initialize()
         {
-            if (init)
+            if (Managed.init)
                 return;
 
             mode.Data = ProfilerModes.ProfileDisabled;
@@ -80,18 +85,18 @@ namespace Unity.Development.Profiling
             {
                 fixed (byte* d = a.data)
                 {
-                    memoryRecordMode = (ProfilerMemoryRecordMode)(*(int*)d);
+                    Managed.memoryRecordMode = (ProfilerMemoryRecordMode)(*(int*)d);
                 }
             });
 
-            init = true;
+            Managed.init = true;
         }
 
         public static unsafe void Shutdown()
         {
             mode.Data = ProfilerModes.ProfileDisabled;
 
-            init = false;
+            Managed.init = false;
         }
     }
 
@@ -382,8 +387,8 @@ namespace Unity.Development.Profiling
     // unity\Modules\Profiler\Runtime\Protocol.h/cpp
     // unity\Modules\Profiler\Runtime\PreThreadProfiler.h/cpp
     // [Header]
-    // [ 
-    //   [BlockHeader[Message ... Message]BlockFooter] ... [BlockHeader[Message ... Message]BlockFooter] 
+    // [
+    //   [BlockHeader[Message ... Message]BlockFooter] ... [BlockHeader[Message ... Message]BlockFooter]
     // ]
     public class ProfilerProtocolSession
     {
@@ -517,7 +522,7 @@ namespace Unity.Development.Profiling
                     var thread = &threadBufferNode->ThreadsBuffer[i];
                     if (thread->nameBytes > 0 && (forceEmitAll || !thread->init))
                     {
-                        EmitThreadInfo(thread->threadId, thread->sysTicksStart, thread->frameIndependent, 
+                        EmitThreadInfo(thread->threadId, thread->sysTicksStart, thread->frameIndependent,
                             thread->groupUtf8, thread->groupBytes, thread->nameUtf8, thread->nameBytes);
                         thread->init = true;
                     }
@@ -558,7 +563,7 @@ namespace Unity.Development.Profiling
 
             // Profiling Session State
             // The Unity profiler has a handshake
-            // 1) Editor->Player - Send a general PlayerConnectionMessage "ProfilerSetMode" 
+            // 1) Editor->Player - Send a general PlayerConnectionMessage "ProfilerSetMode"
             //                     (telling us profile is/isn't disabled according to user setup and which general things to profile)
             // 2) Player->Editor - Respond with a Profiler message describing current profiling state of the Player
             //                     (triggering the editor to enable the profiling session that the user has setup)

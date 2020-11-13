@@ -1,3 +1,4 @@
+#if ENABLE_PROFILER
 using NUnit.Framework;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Development.Profiling;
@@ -518,6 +519,7 @@ namespace Unity.ZeroJobs.Tests
             SpoofExitInternal();
         }
 
+#if false //https://unity3d.atlassian.net/browse/DOTSR-2368
 #if !NET_DOTS
         [Test]
         public unsafe void TestProfilerSessionEmitsMarkerInfoBeforeMarkerThreaded()
@@ -577,6 +579,7 @@ namespace Unity.ZeroJobs.Tests
 
             SpoofExitInternal();
         }
+#endif
 #endif
 
     }
@@ -934,3 +937,4 @@ namespace Unity.ZeroJobs.Tests
     }
 #endif
 }
+#endif

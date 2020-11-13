@@ -9,7 +9,6 @@ namespace UnityEngine.Profiling
 {
     public static class Profiler
     {
-        //[Obsolete("UnityEngine.Profiling.Profiler is obsolete and much slower than the ProfilerMarker API. Please use Unity.Profiling.ProfilerMarker instead.", false)]
         public static unsafe void BeginSample(string s)
         {
 #if ENABLE_PROFILER
@@ -21,7 +20,6 @@ namespace UnityEngine.Profiling
 #endif
         }
 
-        //[Obsolete("UnityEngine.Profiling.Profiler is obsolete and much slower than the ProfilerMarker API. Please use Unity.Profiling.ProfilerMarker instead.", false)]
         public static unsafe void EndSample()
         {
 #if ENABLE_PROFILER

@@ -3,7 +3,7 @@
 # Comments and whitespace can e.g. be used to group by tool (e.g. all roslyn in one group).
 
 # il2cpp
-public: il2cpp/20.09.22_a51d72ca25f24ad5a2be70fb6b69b555fb1af2b115478a65aacece5e517e0d07.7z
+public: il2cpp/20.10.27_718bbef01fa5971e7ec3f58682d144b59a9c639c888732feea8de04cb0f14677.7z
 public: MonoBleedingEdgeSub/acf432a39edc3865d3d97f1825d9576459049f6e_ecafea2afec824fb3f917fcf86ced28099849bc7174252d2929fb02b7e5b1b4b.7z
 
 # node

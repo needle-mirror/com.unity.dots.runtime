@@ -30,7 +30,7 @@ namespace Unity.Entities.Runtime.Build
 
         protected override CleanResult OnClean(CleanContext context)
         {
-            var artifacts = context.GetLastBuildArtifact<DotsRuntimeBuildArtifact>();
+            var artifacts = context.GetBuildArtifact<DotsRuntimeBuildArtifact>();
             if (artifacts == null)
                 return context.Success();
 
@@ -52,7 +52,7 @@ namespace Unity.Entities.Runtime.Build
                 return BoolResult.False("Run is not supported with current build settings");
             }
 
-            var artifact = context.GetLastBuildArtifact<DotsRuntimeBuildArtifact>();
+            var artifact = context.GetBuildArtifact<DotsRuntimeBuildArtifact>();
             if (artifact == null)
             {
                 return BoolResult.False($"Could not retrieve build artifact '{nameof(DotsRuntimeBuildArtifact)}'.");
@@ -83,7 +83,7 @@ namespace Unity.Entities.Runtime.Build
 
         protected override RunResult OnRun(RunContext context)
         {
-            var artifact = context.GetLastBuildArtifact<DotsRuntimeBuildArtifact>();
+            var artifact = context.GetBuildArtifact<DotsRuntimeBuildArtifact>();
             var profile = context.GetComponentOrDefault<DotsRuntimeBuildProfile>();
 
             if (!profile.Target.Run(artifact.OutputTargetFile))
@@ -97,7 +97,7 @@ namespace Unity.Entities.Runtime.Build
 
         public override DirectoryInfo GetOutputBuildDirectory(BuildConfiguration config)
         {
-            var artifact = BuildArtifacts.GetBuildArtifact<DotsRuntimeBuildArtifact>(config);
+            var artifact = config.GetBuildArtifact<DotsRuntimeBuildArtifact>();
             return artifact.OutputTargetFile.Directory;
         }
     }

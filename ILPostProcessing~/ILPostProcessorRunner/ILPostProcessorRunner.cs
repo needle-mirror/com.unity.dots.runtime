@@ -1,12 +1,19 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text;
-using CommandLine;
+using Mono.Options;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
+
+
+public class ILPostProcessorErrorException : Exception
+{
+    public ILPostProcessorErrorException(string message) : base(message)
+    {}
+}
 
 public class NamedILPostProcessorWrapper
 {
@@ -24,6 +31,7 @@ public class ILPostProcessorRunner
 {
     static NamedILPostProcessorWrapper[] NamedILPostProcessors;
     static CompiledAssembly InputAssembly;
+    static string[] AssemblyFolderPaths;
     static string OutputAsmPath;
     static string OutputPdbPath;
 
@@ -32,17 +40,17 @@ public class ILPostProcessorRunner
     /// </summary>
     class Options
     {
-        [Option('o', "outputDir", Required = true, HelpText = "Set the directory for processed assemblies to be written to.")]
+        public string AssemblyPath { get; set; }
+
         public string OutputDir { get; set; }
 
-        [Option('p', "processors", Separator = ',', Required = false, HelpText = "Comma delimited list of ILPostProcessor Assembly paths.")]
         public IEnumerable<string> ILPostProcessorPaths { get; set; }
 
-        [Option('r', "assemblyReferences", Separator = ',', Required = false, HelpText = "Comma delimited paths to all reference assemblies of the assembly specified for the --assembly argument.")]
+        public IEnumerable<string> AssemblyFolderPaths { get; set; }
+
         public IEnumerable<string> ReferenceAssemblyPaths { get; set; }
 
-        [Option('d', "scriptingDefines", Separator = ',', Required = false, HelpText = "Comma delimited list of scripting defines to be passed to the ILPostProcessors.")]
-        public IEnumerable<string> ScriptingDefines { get; set; }
+        public IEnumerable<string> Defines { get; set; }
     }
 
     /// <summary>
@@ -52,8 +60,8 @@ public class ILPostProcessorRunner
     {
         public string Name { get; }
         public string[] References { get; }
-        public InMemoryAssembly InMemoryAssembly { get; set; }
         public string[] Defines { get; }
+        public InMemoryAssembly InMemoryAssembly { get; set; }
 
         public CompiledAssembly(string asmPath, string[] referencePaths, string[] defines)
         {
@@ -66,8 +74,8 @@ public class ILPostProcessorRunner
 
             Name = Path.GetFileNameWithoutExtension(asmPath);
             References = referencePaths;
-            InMemoryAssembly = new InMemoryAssembly(peData, pdbData);
             Defines = defines;
+            InMemoryAssembly = new InMemoryAssembly(peData, pdbData);
         }
 
         public void Save()
@@ -85,31 +93,45 @@ public class ILPostProcessorRunner
 
         try
         {
-            Parser.Default.ParseArguments<Options>(args)
-                .WithParsed<Options>(o =>
-                {
-                    NamedILPostProcessors = o.ILPostProcessorPaths
-                        .Select(p => Assembly.LoadFrom(p))
-                        .SelectMany(asm => asm.GetTypes().Where(t => typeof(ILPostProcessor).IsAssignableFrom(t)))
-                        .Select(t => new NamedILPostProcessorWrapper(t.FullName, (ILPostProcessor)Activator.CreateInstance(t)))
-                        .ToArray();
+            var options = new Options();
 
-                    var assemblyPath = args[0];
-                    OutputAsmPath = Path.Combine(o.OutputDir, Path.GetFileName(assemblyPath));
-                    OutputPdbPath = Path.ChangeExtension(OutputAsmPath, "pdb");
-                    InputAssembly = new CompiledAssembly(assemblyPath, o.ReferenceAssemblyPaths.ToArray(), o.ScriptingDefines.ToArray());
-                });
+            OptionSet optionSet = new OptionSet()
+                .Add("a|assembly=", a => { options.AssemblyPath = a; })
+                .Add("o|outputDir=", a => { options.OutputDir = a; })
+                .Add("p|processors=", a => options.ILPostProcessorPaths = a.Split(','))
+                .Add("f|assemblyFolders=", a => options.AssemblyFolderPaths = a.Split(','))
+                .Add("r|assemblyReferences=", a => options.ReferenceAssemblyPaths = a.Split(','))
+                .Add("d|defines=", a => options.Defines = a.Split(','));
+            optionSet.Parse(args);
+
+            AssemblyFolderPaths = options.AssemblyFolderPaths.ToArray();
+
+            NamedILPostProcessors = options.ILPostProcessorPaths
+                .Select(p => Assembly.LoadFrom(p))
+                .SelectMany(asm => asm.GetTypes().Where(t => typeof(ILPostProcessor).IsAssignableFrom(t)))
+                .Select(t => new NamedILPostProcessorWrapper(t.FullName, (ILPostProcessor)Activator.CreateInstance(t)))
+                .ToArray();
+
+            OutputAsmPath = Path.Combine(options.OutputDir, Path.GetFileName(options.AssemblyPath));
+            OutputPdbPath = Path.ChangeExtension(OutputAsmPath, "pdb");
+            InputAssembly = new CompiledAssembly(options.AssemblyPath, options.ReferenceAssemblyPaths.ToArray(), options.Defines?.ToArray() ?? Array.Empty<string>());
         }
         catch (Exception e)
         {
-            Console.WriteLine("ILPostProcessorRunner caught the following exception while processing arguments:\n" + e);
-
             var rtle = e as ReflectionTypeLoadException;
+
+            if (rtle == null)
+            {
+                throw;
+            }
+
+            Console.Error.WriteLine("ILPostProcessorRunner caught the following exception while processing arguments:\n" + e);
+
             if (rtle != null)
             {
                 foreach (Exception inner in rtle.LoaderExceptions)
                 {
-                    Console.WriteLine(inner);
+                    Console.Error.WriteLine(inner);
                 }
             }
 
@@ -119,26 +141,27 @@ public class ILPostProcessorRunner
         return success;
     }
 
-    public static NamedILPostProcessorWrapper[] SortILPostProcessors()
+    static NamedILPostProcessorWrapper[] SortILPostProcessors()
     {
         // Sort by name to ensure we have some determinism on how we are processing assemblies should
         // two ILPostProcessors potentially conflict. We will need to likely add a more structured ordering later
         var sortedList = new List<NamedILPostProcessorWrapper>(NamedILPostProcessors);
-        sortedList.Sort((a, b) => a.Name.CompareTo(b.Name));
+        sortedList.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
 
         return sortedList.ToArray();
     }
 
-    public static void RunILPostProcessors(NamedILPostProcessorWrapper[] ilpostProcessors)
+    static void RunILPostProcessors(NamedILPostProcessorWrapper[] ilpostProcessors)
     {
         foreach (var namedProcessor in ilpostProcessors)
         {
-            var processor = namedProcessor.ILPostProcessor;
-            if (!processor.WillProcess(InputAssembly))
-                continue;
-
-            using (new Marker($"\t{namedProcessor.Name}"))
+            using (new Marker($"ILPostProcessor '{namedProcessor.Name}' on {InputAssembly.Name}.dll"))
             {
+                var processor = namedProcessor.ILPostProcessor;
+
+                if (!processor.WillProcess(InputAssembly))
+                    continue;
+
                 var result = processor.Process(InputAssembly);
                 if (result == null)
                     continue;
@@ -156,67 +179,139 @@ public class ILPostProcessorRunner
         }
     }
 
-    public static void HandleDiagnosticMessages(string ilppName, string asmName, List<DiagnosticMessage> messageList)
+    static void HandleDiagnosticMessages(string ilppName, string asmName, List<DiagnosticMessage> messageList)
     {
         bool hasError = false;
 
-        StringBuilder sb = new StringBuilder();
         foreach (var diagMsg in messageList)
         {
-            if (diagMsg.DiagnosticType == DiagnosticType.Error)
+            bool isError = diagMsg.DiagnosticType == DiagnosticType.Error;
+
+            if (isError)
             {
                 hasError = true;
             }
 
-            if (!string.IsNullOrEmpty(diagMsg.File))
-                sb.Append($"{diagMsg.File}({diagMsg.Line},{diagMsg.Column}): ");
-
-            sb.Append($"{diagMsg.MessageData}\n");
-        } 
-
-        Console.WriteLine(sb.ToString());
+            var message = $"{diagMsg.File}({diagMsg.Line},{diagMsg.Column}): {(isError ? "error" : "warning")} {diagMsg.MessageData}";
+            Console.Error.WriteLine(message);
+        }
 
         if (hasError)
         {
-            throw new Exception($"ILPostProcessorRunner '{ilppName}' had a fatal error processing '{asmName}'\n" +
+            throw new ILPostProcessorErrorException($"ILPostProcessorRunner '{ilppName}' had a fatal error processing '{asmName}'\n " +
                 $"Refer to diagnostic messages above for more details. \n" +
                 $"Exiting..."
             );
         }
     }
 
-    public static int Main(string[] args)
+    static Assembly AssemblyResolve(object sender, ResolveEventArgs args)
     {
-        using (new Marker("ILPostProcessorRunner Time"))
+        var assemblyName = new AssemblyName(args.Name).Name;
+        var assemblyFilename = assemblyName + ".dll";
+
+        var domainAssembly = AppDomain.CurrentDomain.GetAssemblies().SingleOrDefault(a => a.GetName().Name.Equals(new AssemblyName(args.Name).Name));
+
+        if (domainAssembly != null)
         {
-
-            if (!ProcessArgs(args))
-                return -1;
-
-            var sortedILPostProcessors = SortILPostProcessors();
-            RunILPostProcessors(sortedILPostProcessors);
-
-            // Write out our Input Assembly, processed or not (in which case it's just a copy)
-            InputAssembly.Save();
+            return domainAssembly;
         }
-        return 0;
+
+        var assemblyPaths = new List<string>(AssemblyFolderPaths.Length);
+
+        foreach (var folderPath in AssemblyFolderPaths)
+        {
+            string assemblyPath = Path.Combine(folderPath, assemblyFilename);
+
+            assemblyPaths.Add((assemblyPath));
+
+            if (!File.Exists(assemblyPath))
+                continue;
+
+            Assembly assembly = Assembly.LoadFrom(assemblyPath);
+
+            return assembly;
+        }
+
+        throw new ILPostProcessorErrorException(
+            $"Could not find assembly file for assembly named '{assemblyName}'.\nTried the following paths:\n{string.Join("\n", assemblyPaths.ToArray())}");
     }
 
+    public static int Main(string[] args)
+    {
+        string[] arguments = args;
+
+        AppDomain.CurrentDomain.AssemblyResolve += AssemblyResolve;
+
+        using (new Marker("ILPostProcessorRunner"))
+        {
+            try
+            {
+                if (args[0].StartsWith("@", StringComparison.Ordinal))
+                {
+                    var responseFilePath = args[0].Substring(1);
+                    var lines = File.ReadAllLines(responseFilePath);
+
+                    var rspArguments = new List<string>(lines.Length);
+
+                    foreach (var line in lines)
+                    {
+                        rspArguments.AddRange(Utility.SplitRespectQuotes(line, char.IsWhiteSpace));
+                    }
+
+                    arguments = rspArguments.ToArray();
+                }
+
+                if (!ProcessArgs(arguments))
+                    return 2;
+
+                var sortedILPostProcessors = SortILPostProcessors();
+
+                RunILPostProcessors(sortedILPostProcessors);
+                // Write out our Input Assembly, processed or not (in which case it's just a copy)
+                InputAssembly.Save();
+            }
+            catch (Exception e)
+            {
+                if (e is ILPostProcessorErrorException)
+                {
+                    Console.WriteLine(e);
+                }
+                else
+                {
+                    StackTrace st = new StackTrace(e, true);
+                    StackFrame frame = st.GetFrame(0);
+
+                    var message =
+                        $"{frame.GetFileName()}({frame.GetFileLineNumber()},{frame.GetFileColumnNumber()}): error {e}";
+                    Console.Error.WriteLine(message);
+                }
+
+                var argsString = string.Join("\n", args);
+                Console.WriteLine($"ILPostPostRunner was started with arguments:\n{argsString}");
+
+                return 1;
+            }
+        }
+
+        return 0;
+    }
 
     struct Marker : IDisposable
     {
         System.Diagnostics.Stopwatch Stopwatch;
-        string Name;
-        public Marker(string name)
+        string Text;
+        public Marker(string text)
         {
-            Name = name;
+            Text = text;
+            Console.WriteLine($"- Starting {Text}");
             Stopwatch = System.Diagnostics.Stopwatch.StartNew();
         }
 
         public void Dispose()
         {
             Stopwatch.Stop();
-            Console.WriteLine($"{Name}: {Stopwatch.ElapsedMilliseconds}ms");
+            Console.WriteLine($"- Finished {Text} in {Stopwatch.Elapsed.TotalSeconds:0.######} seconds");
         }
     }
 }

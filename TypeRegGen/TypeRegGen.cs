@@ -190,13 +190,13 @@ namespace Unity.ZeroPlayer
                     }
 
                     // AssemblyTypeRegistry criteria
-                    if (t.IsClass && t.FullName == "Unity.Entities.CodeGeneratedRegistry.AssemblyTypeRegistry")
+                    if (t.IsClass && t.Name == "AssemblyTypeRegistry" && t.Namespace == "Unity.Entities.CodeGeneratedRegistry")
                     {
                         m_AssemblyTypeRegistries.Add(t);
                     }
 
                     // Unmanaged Systems early initialization criteria
-                    if(t.FullName.StartsWith("__UnmanagedPostProcessorOutput__"))
+                    if (t.FullName.StartsWith("__UnmanagedPostProcessorOutput__"))
                     {
                         foreach (var m in t.Methods)
                         {
@@ -210,6 +210,17 @@ namespace Unity.ZeroPlayer
 
                                 m_EarlyInitMethods.Add(m);
                             }
+                        }
+                    }
+                    else if (t.Name == "Registration" && t.Namespace == "Unity.Properties.Reflection.Internal")
+                    {
+                        var method = t.Methods.FirstOrDefault(m => m.IsStatic && m.ReturnType.MetadataType == MetadataType.Void && m.Name == "Initialize");
+                        if (method != null)
+                        {
+                            ForceTypeAsPublic(t);
+                            method.IsPublic = true;
+
+                            m_EarlyInitMethods.Add(method);
                         }
                     }
                 }

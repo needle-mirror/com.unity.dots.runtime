@@ -55,10 +55,11 @@ namespace Unity.ZeroPlayer
         public static MethodReference MakeMethodRefForGenericFieldType(AssemblyDefinition asm, MethodReference method, TypeReference fieldType)
         {
             var methodRef = asm.MainModule.ImportReference(method);
-            if (fieldType is GenericInstanceType)
+            if (fieldType is GenericInstanceType && !fieldType.ContainsGenericParameter)
             {
                 List<TypeReference> genericArgs = CreateGenericArgs(asm.MainModule, fieldType);
-                methodRef = asm.MainModule.ImportReference(method.MakeHostInstanceGeneric(genericArgs.ToArray()));
+                var closedMethod = method.MakeHostInstanceGeneric(genericArgs.ToArray());
+                methodRef = asm.MainModule.ImportReference(closedMethod);
             }
 
             return methodRef;
@@ -94,14 +95,6 @@ namespace Unity.ZeroPlayer
                 // The fully generic-resolved field reference.  This is the reference that's needed
                 // as a Ldfld(a) reference.
                 var genericResolvedFieldType = genericResolver.ResolveFieldType(typeField);
-
-                // TODO this is the point at which generic jobs break down.  We have no
-                // visibility into the generic type, so we can't do anything with internal
-                // members that are relevant to jobs.  When we don't support generic jobs,
-                // this next check can be made a hard error, and the field resolve can happen later.
-                // So if there are any generic parameters left, we just ignore this field.
-                if (genericResolvedFieldType.ContainsGenericParameter)
-                    continue;
 
                 var shouldYield = shouldYieldFilter?.Invoke(typeField) ?? true;
                 var shouldRecurse = shouldRecurseFilter?.Invoke(typeField) ?? true;

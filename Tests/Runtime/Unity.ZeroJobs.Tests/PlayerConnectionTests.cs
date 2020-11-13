@@ -6,7 +6,9 @@ using Unity.Development.PlayerConnection;
 using UnityEngine;
 using static Unity.Baselib.LowLevel.Binding;
 using UnityEngine.Networking.PlayerConnection;
+#if ENABLE_PROFILER
 using Unity.Development.Profiling;
+#endif
 using Unity.Collections;
 using Unity.Core;
 
@@ -227,8 +229,10 @@ namespace Unity.ZeroJobs.Tests
         [OneTimeSetUp]
         public void TopLevelSetUp()
         {
+#if ENABLE_PROFILER
             // The test runner has already initialized these so kill them and do them per test
             Profiler.Shutdown();
+#endif
             Connection.Shutdown();
         }
 
@@ -237,7 +241,9 @@ namespace Unity.ZeroJobs.Tests
         {
             TempMemoryScope.EnterScope();
             Connection.Initialize();
+#if ENABLE_PROFILER
             Profiler.Initialize();
+#endif
             unsafe
             {
                 messageBuilder = MessageStreamManager.CreateStreamBuilder();
@@ -251,7 +257,9 @@ namespace Unity.ZeroJobs.Tests
             {
                 MessageStreamManager.DestroyStreamBuilder(messageBuilder);
             }
+#if ENABLE_PROFILER
             Profiler.Shutdown();
+#endif
             Connection.Shutdown();
             SpoofExitInternal();
             TempMemoryScope.ExitScope();
@@ -262,7 +270,9 @@ namespace Unity.ZeroJobs.Tests
         {
             // The test runner expects these to be initialized when it shuts down Dots Runtime static systems
             Connection.Initialize();
+#if ENABLE_PROFILER
             Profiler.Initialize();
+#endif
         }
     }
 
@@ -409,6 +419,7 @@ namespace Unity.ZeroJobs.Tests
     //---------------------------------------------------------------------------------------------------
     // PLAYER CONNECTION DIRECT LISTENER TESTS
     //---------------------------------------------------------------------------------------------------
+#if !UNITY_WEBGL
     public class PlayerConnectionListenTests : PlayerConnectionTestFixture
     {
         [Test]
@@ -493,7 +504,7 @@ namespace Unity.ZeroJobs.Tests
             SpoofExitInternal();
         }
     }
-
+#endif
 
     //---------------------------------------------------------------------------------------------------
     // PLAYER CONNECTION RECEIVE MESSAGE TESTS

@@ -23,7 +23,7 @@ public static class Program {
         TempMemoryScope.EnterScope();
         // Static storage used for the whole lifetime of the process. Create it once here
         // so heap tracking tests won't fight over the storage causing alloc/free mismatches
-        WordStorage.Setup();
+        WordStorage.Initialize();
 
         // TypeManager initialization uses temp memory, so let's free it before creating a global scope
         Unity.Entities.TypeManager.Initialize();
@@ -44,7 +44,7 @@ public static class Program {
 
         TempMemoryScope.EnterScope();
         Unity.Entities.TypeManager.Shutdown();
-        WordStorage.Instance.Dispose();
+        WordStorage.Shutdown();
         TempMemoryScope.ExitScope();
 
         DotsRuntime.Shutdown();

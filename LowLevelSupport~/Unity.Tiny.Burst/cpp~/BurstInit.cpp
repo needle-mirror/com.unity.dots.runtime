@@ -130,10 +130,19 @@ const void* NativeGetExternalFunctionPointerCallback(const char* name)
 
 }
 
+typedef void (*BurstExceptionCallback)(const char* exceptionName, int exceptionNameLen, const char* errorMessage, int errorMessageLen);
+static BurstExceptionCallback s_BurstExceptionCallback = nullptr;
 extern "C" DLLEXPORT void burst_abort(const char* exceptionName, const char* errorMessage)
 {
-    printf("Exception %s thrown with error message %s. Turn off burst for this job to learn more.\n", exceptionName, errorMessage);
-    std::terminate();
+    if (s_BurstExceptionCallback == nullptr)
+    {
+        printf("Exception %s thrown with error message %s. Turn off burst for this job or function to learn more.\n", exceptionName, errorMessage);
+        std::terminate();
+    }
+
+    int exceptionNameLen = exceptionName == nullptr ? 0 : (int) strlen(exceptionName);
+    int errorMessageLen = errorMessage == nullptr ? 0 : (int) strlen(errorMessage);
+    s_BurstExceptionCallback(exceptionName, exceptionNameLen, errorMessage, errorMessageLen);
 }
 
 
@@ -205,8 +214,10 @@ void BurstInit_Desktop()
 
 
 
-extern "C" DLLEXPORT void BurstInit()
+extern "C" DLLEXPORT void BurstInit(void* rethrowFnPtr)
 {
+    s_BurstExceptionCallback = (BurstExceptionCallback) rethrowFnPtr;
+
 #if !ENABLE_UNITY_BURST
     return;
 #elif UNITY_IOS

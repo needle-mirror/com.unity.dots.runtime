@@ -7,6 +7,7 @@ using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
 using Unity.Build.Internals;
 using Unity.Core.Compression;
+using Unity.Entities.Conversion;
 using Unity.Mathematics;
 using Unity.Scenes;
 using Unity.Scenes.Editor;
@@ -31,17 +32,15 @@ namespace Unity.Entities.Runtime.Build
 
         public override Type[] UsedComponents { get; } = new[]
         {
+            typeof(ConversionSystemFilterSettings),
             typeof(DotsRuntimeBuildProfile),
             typeof(DotsRuntimeRootAssembly),
             typeof(SceneList)
         }.Concat(GetConfigurationSystemUsedTypes()).Distinct().ToArray();
 
-        void WriteDebugFile(BuildContext context, BuildManifest manifest)
+        void WriteDebugFile(BuildManifest manifest, DirectoryInfo logDirectory)
         {
-            var rootAssembly = context.GetComponentOrDefault<DotsRuntimeRootAssembly>();
-            var targetName = rootAssembly.MakeBeeTargetName(context.BuildConfigurationName);
-            var outputDir = BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName);
-            var debugFile = new NPath(outputDir).Combine("Logs/SceneExportLog.txt");
+            var debugFile = new NPath(logDirectory).Combine("SceneExportLog.txt");
             var debugSceneAssets = manifest.Assets.OrderBy(x => x.Value)
                 .Select(x => $"{x.Key.ToString("N")} = {x.Value}").ToList();
 
@@ -89,19 +88,25 @@ namespace Unity.Entities.Runtime.Build
             {
                 var dataDirInfo =
                     WorldExport.GetOrCreateDataDirectoryFrom(rootAssembly.StagingDirectory.Combine(targetName));
+                var logDirectory = WorldExport.GetOrCreateLogDirectoryFrom(targetName);
                 var subScenePath = WorldExport
                     .GetOrCreateSubSceneDirectoryFrom(rootAssembly.StagingDirectory.Combine(targetName)).ToString();
                 var outputDir = BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName);
+
+                var hasFilter = context.TryGetComponent<ConversionSystemFilterSettings>(out var conversionFilter);
 
                 // Run configuration systems
                 ConfigurationSystemGroup configSystemGroup = tmpWorld.GetOrCreateSystem<ConfigurationSystemGroup>();
                 var systems = TypeCache.GetTypesDerivedFrom(typeof(ConfigurationSystemBase));
                 foreach (var type in systems)
                 {
+                    if (hasFilter && !conversionFilter.ShouldRunConversionSystem(type))
+                        continue;
+
                     ConfigurationSystemBase baseSys = (ConfigurationSystemBase) tmpWorld.GetOrCreateSystem(type);
                     baseSys.BuildContext = context;
                     baseSys.AssemblyCache = s_AssemblyCache;
-                    baseSys.OutputDir = outputDir;
+                    baseSys.LogDirectoryPath = logDirectory.FullName;
                     configSystemGroup.AddSystemToUpdateList(baseSys);
                 }
 
@@ -147,7 +152,7 @@ namespace Unity.Entities.Runtime.Build
                     dataDirInfo, writeEntitySceneSettings.OutputPath);
 
                 // Export additional general build debug logs
-                WriteDebugFile(context, manifest);
+                WriteDebugFile(manifest, logDirectory);
 
                 // Write exported types of the configuration scene to its export logs.
                 EditorEntityScenes.CheckExportedTypes(writeEntitySceneSettings, true,
@@ -155,13 +160,7 @@ namespace Unity.Entities.Runtime.Build
                     ref logHandler.JournalData);
                 EditorEntityScenes.WriteConversionLog(ConfigurationScene.Guid,
                     logHandler.JournalData.SelectLogEventsOrdered().ToList(), null,
-                    writeEntitySceneSettings.OutputPath);
-
-                // Deploy configuration export log file
-                var exportLogFile = EditorEntityScenes.GetSceneWritePath(
-                    EntityScenesPaths.PathType.EntitiesConversionLog, "", ConfigurationScene.Guid,
-                    writeEntitySceneSettings.OutputPath);
-                manifest.AddAdditionalFilesToDeploy(new FileInfo(exportLogFile));
+                    logDirectory.FullName);
 
                 logHandler.Unhook();
 

@@ -25,7 +25,7 @@ namespace Unity.Entities.Runtime.Build
             var outputDir = new DirectoryInfo(BuildStepGenerateBeeFiles.GetFinalOutputDirectory(context, targetName));
 
             var result = BeeTools.Run(targetName, workingDir, context.BuildProgress);
-            outputDir.Combine("Logs").GetFile("BuildLog.txt").WriteAllText(result.Output);
+            WorldExport.GetOrCreateLogDirectoryFrom(targetName).GetFile("BuildLog.txt").WriteAllText(result.Output);
             workingDir.GetFile("runbuild" + ShellScriptExtension()).UpdateAllText(result.Command);
 
             if (result.Failed)
@@ -36,7 +36,7 @@ namespace Unity.Entities.Runtime.Build
             if (!string.IsNullOrEmpty(rootAssembly.ProjectName))
             {
                 var outputTargetFile = outputDir.GetFile(rootAssembly.ProjectName + profile.Target.ExecutableExtension);
-                context.SetValue(new DotsRuntimeBuildArtifact { OutputTargetFile = outputTargetFile });
+                context.SetBuildArtifact(new DotsRuntimeBuildArtifact { OutputTargetFile = outputTargetFile });
             }
 
             return context.Success();

@@ -14,4 +14,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unity.Tiny.Rendering.Tests")]
 [assembly: InternalsVisibleTo("Unity.ZeroJobs.Tests")]
 [assembly: InternalsVisibleTo("Unity.Networking.Transport")]
-[assembly: InternalsVisibleTo("Unity.Tiny.GameSave")]
+[assembly: InternalsVisibleTo("Unity.Tiny.GameSave.Native")]
+[assembly: InternalsVisibleTo("Unity.Tiny.Audio.Native")]

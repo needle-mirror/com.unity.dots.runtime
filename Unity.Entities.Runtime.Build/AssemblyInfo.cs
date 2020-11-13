@@ -6,3 +6,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unity.DevMode.DotsRuntimeSupport")]
 [assembly: InternalsVisibleTo("SolutionBuildTests")]
 [assembly: InternalsVisibleTo("Unity.Tiny.CloudBuild.Build")]
+[assembly: InternalsVisibleTo("Unity.Tiny.Rendering.Authoring")]

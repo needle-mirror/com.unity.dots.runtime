@@ -1,4 +1,5 @@
 using System;
+using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine.SceneManagement;
 
@@ -8,11 +9,20 @@ namespace Unity.Entities.Runtime.Build
     {
         private bool m_sceneLoaded;
 
-        public Scene ProjectScene { get; }
+        public Scene ProjectScene { get; private set; }
 
         public LoadedSceneScope(string ident, bool isName = false)
         {
-            var path = isName ? ConversionUtils.GetScenePathForSceneWithName(ident) : ident;
+            LoadScene(isName ? ConversionUtils.GetScenePathForSceneWithName(ident) : ident);
+        }
+
+        public LoadedSceneScope(Hash128 hash)
+        {
+            LoadScene(AssetDatabase.GUIDToAssetPath(hash.ToString()));
+        }
+
+        void LoadScene(string path)
+        {
             var projScene = SceneManager.GetSceneByPath(path);
             m_sceneLoaded = projScene.IsValid() && projScene.isLoaded;
             if (!m_sceneLoaded)

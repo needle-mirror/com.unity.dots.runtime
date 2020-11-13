@@ -54,7 +54,10 @@ public static class DotsConfigs
 
                     // Need to know this prior to determining need for burst
                     var mdb = ShouldEnableDevelopmentOptionForSetting("EnableManagedDebugging", new[] { DotsConfiguration.Debug, DotsConfiguration.Develop }, settingsObject);
-                    mdb = target.ValidateManagedDebugging(mdb);
+                    if (!target.ValidateManagedDebugging(ref mdb))
+                    {
+                        continue;
+                    }
                     if(mdb && DotsConfigForSettings(settingsObject, out var codeGen) == DotsConfiguration.Debug && target.ScriptingBackend == ScriptingBackend.TinyIl2cpp)
                         Errors.PrintWarning("Debug builds with managed debugging are very slow. It's recommended to use the Develop configuration instead.");
 

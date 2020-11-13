@@ -8,6 +8,6 @@ namespace Bee.Toolchain.Extension
 {
     public interface IPackagedAppExtension
     {
-        void SetAppPackagingParameters(String gameName, DotsConfiguration config, IEnumerable<IDeployable> supportFiles);
+        void SetAppPackagingParameters(String gameName, DotsConfiguration config);
     }
 }

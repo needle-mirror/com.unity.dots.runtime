@@ -502,10 +502,7 @@ public class BuildProgram
                 if (builtNativeProgram is IPackagedAppExtension)
                 {
                     (builtNativeProgram as IPackagedAppExtension).SetAppPackagingParameters(
-                        gameProgram.AsmDefDescription.Name,
-                        config.DotsConfiguration,
-                        gameProgram.SupportFiles.For(config).Concat(il2CppOutputProgram.SupportFiles.For(config.NativeProgramConfiguration))
-                        );
+                        gameProgram.AsmDefDescription.Name, config.DotsConfiguration);
                 }
 
                 if (config.PlatformBuildConfig is WebBuildConfig webBuildConfig)

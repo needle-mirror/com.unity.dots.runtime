@@ -5,11 +5,13 @@ using System.IO;
 using System.Linq;
 using Unity.Assertions;
 using Unity.Build;
+using Unity.Build.Common;
 using Unity.Build.DotsRuntime;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEditorInternal;
 using UnityEngine;
+using BuildTarget = Unity.Build.DotsRuntime.BuildTarget;
 #if DOTS_TEST_RUNNER
 using Unity.Dots.TestRunner;
 #endif
@@ -138,11 +140,45 @@ namespace Unity.Entities.Runtime.Build
             return GetSolutionPath().Exists();
         }
 
-        static NPath GetSolutionPath()
+        internal static NPath GetSolutionPath()
         {
             var projectPath = new NPath(UnityEngine.Application.dataPath).Parent;
             var slnPath = projectPath.Combine(projectPath.FileName + "-Dots.sln");
             return slnPath;
+        }
+
+        internal static void GenerateAndOpenSolution(BuildConfiguration buildConfig, string buildTargetName)
+        {
+            using (var progress = new BuildProgress(k_WindowTitle, "Please wait..."))
+            {
+                GenerateSolution(buildConfig, progress, buildTargetName);
+                GenerateDotsSolutionView.RunBeeProjectFiles();
+                OpenSolution();
+            }
+        }
+
+        static void GenerateSolution(BuildConfiguration buildConfig, BuildProgress progress, string buildTargetName)
+        {
+            progress.Title = $"Generating '{buildTargetName}'";
+
+            var buildPipeline = buildConfig.GetComponent<DotsRuntimeBuildProfile>().Pipeline;
+            var steps = new List<Type>();
+
+            if (buildPipeline.BuildSteps.Contains(new BuildStepExportScenes()))
+                steps.Add(typeof(BuildStepExportScenes));
+
+            if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration()))
+                steps.Add(typeof(BuildStepExportConfiguration));
+
+            steps.Add(typeof(BuildStepGenerateBeeFiles));
+
+            var pipeline = new GenerateDotsSolutionBuildPipeline(steps, (buildPipeline as DotsRuntimeBuildPipelineBase)?.Target);
+            var result = pipeline.Build(buildConfig, progress);
+            if (result.Failed)
+            {
+                UnityEngine.Debug.LogError(
+                    $"{k_WindowTitle} failed.\n{(result.Exception != null ? result.Exception.ToString() : result.Message)}");
+            }
         }
 
         static void OpenSolution()
@@ -828,7 +864,14 @@ namespace Unity.Entities.Runtime.Build
 
             internal bool AnyConfigsSelected()
             {
-                return GetRows().OfType<ConfigViewItem>().Any(item => item.IncludeInSolution);
+                foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
+                {
+                    foreach (var child in item.children.OfType<ConfigViewItem>())
+                        if (child.IncludeInSolution)
+                            return true;
+                }
+
+                return false;
             }
 
             internal void GenerateSolution()
@@ -839,43 +882,30 @@ namespace Unity.Entities.Runtime.Build
                     if (Directory.Exists(settingsDirectory))
                         Directory.Delete(settingsDirectory, true);
 
-                    foreach (var configItem in GetRows().OfType<ConfigViewItem>().Where(item => item.IncludeInSolution))
+                    foreach (var item in GetRows().OfType<RootAssemblyViewItem>())
                     {
-                        progress.Title = $"Generating '{configItem.BuildTargetName}'";
+                        foreach (var configItem in item.children.OfType<ConfigViewItem>().Where(child => child.IncludeInSolution))
+                        {
+                            progress.Title = $"Generating '{configItem.BuildTargetName}'";
 
-                        BuildConfiguration buildConfig = null;
-                        if (configItem is BuildConfigViewItem buildConfigItem)
-                            buildConfig = buildConfigItem.BuildConfiguration;
+                            BuildConfiguration buildConfig = null;
+                            if (configItem is BuildConfigViewItem buildConfigItem)
+                                buildConfig = buildConfigItem.BuildConfiguration;
 #if DOTS_TEST_RUNNER
-                        else if(configItem is RuntimeTestTargetConfigViewItem runtimeTestTargetConfigViewItem)
-                        {
-                            buildConfig = DotsTestRunner.GenerateBuildConfiguration(runtimeTestTargetConfigViewItem.RuntimeTestTarget);
-                            DotsTestRunner.HackPreRunBuildConfigFixup(buildConfig);
-                        }
+                            else if (configItem is RuntimeTestTargetConfigViewItem runtimeTestTargetConfigViewItem)
+                            {
+                                buildConfig =
+                                    DotsTestRunner.GenerateBuildConfiguration(runtimeTestTargetConfigViewItem
+                                        .RuntimeTestTarget);
+                                DotsTestRunner.HackPreRunBuildConfigFixup(buildConfig);
+                            }
 #endif
-                        else
-                        {
-                            throw new Exception("Invalid row type in generate solution window view!");
-                        }
+                            else
+                            {
+                                throw new Exception("Invalid row type in generate solution window view!");
+                            }
 
-                        var buildPipeline = buildConfig.GetComponent<DotsRuntimeBuildProfile>().Pipeline;
-                        var steps = new List<Type>();
-
-                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportScenes()))
-                            steps.Add(typeof(BuildStepExportScenes));
-
-                        if (buildPipeline.BuildSteps.Contains(new BuildStepExportConfiguration()))
-                            steps.Add(typeof(BuildStepExportConfiguration));
-
-                        steps.Add(typeof(BuildStepGenerateBeeFiles));
-
-                        var pipeline = new GenerateDotsSolutionBuildPipeline(steps);
-                        pipeline.Build(buildConfig, progress);
-
-                        var result = pipeline.Build(buildConfig, progress);
-                        if (result.Failed)
-                        {
-                            UnityEngine.Debug.LogError($"{k_WindowTitle} failed.\n{(result.Exception != null ? result.Exception.ToString() : result.Message)}");
+                            GenerateDotsSolutionWindow.GenerateSolution(buildConfig, progress, configItem.BuildTargetName);
                         }
                     }
 
@@ -913,7 +943,18 @@ namespace Unity.Entities.Runtime.Build
 
         sealed class GenerateDotsSolutionBuildPipeline : BuildPipelineBase
         {
-            public GenerateDotsSolutionBuildPipeline(IEnumerable<Type> steps) : base(steps.ToArray()) {}
+            public BuildTarget Target { get; set; }
+            public override Type[] UsedComponents =>
+                base.UsedComponents
+                .Concat(Target?.UsedComponents)
+                // @TODO: Remove this and fix in each BuildTarget instead
+                .Concat(new[] { typeof(GeneralSettings) })
+                .Distinct().ToArray();
+
+            public GenerateDotsSolutionBuildPipeline(IEnumerable<Type> steps, BuildTarget target) : base(steps.ToArray())
+            {
+                Target = target;
+            }
 
             protected override CleanResult OnClean(CleanContext context) => throw new NotImplementedException();
             protected override BuildResult OnBuild(BuildContext context) => BuildSteps.Run(context);

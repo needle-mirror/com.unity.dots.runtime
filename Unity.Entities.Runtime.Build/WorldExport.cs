@@ -7,6 +7,7 @@ using Unity.Entities.Serialization;
 using Unity.Scenes;
 using Unity.Core.Compression;
 using Unity.Entities.Runtime;
+using UnityEngine;
 
 namespace Unity.Entities.Runtime.Build
 {
@@ -52,6 +53,20 @@ namespace Unity.Entities.Runtime.Build
                 Directory.CreateDirectory(subscenesDirectory.FullName);
             }
             return subscenesDirectory;
+        }
+
+        internal static DirectoryInfo GetOrCreateLogDirectoryFrom(string target)
+        {
+            var logsDirectory = new DirectoryInfo(Application.dataPath + "/../Logs").Combine(target);
+            if (string.IsNullOrEmpty(logsDirectory.FullName))
+            {
+                throw new ArgumentException($"Invalid output file directory: {logsDirectory.FullName}", nameof(logsDirectory.FullName));
+            }
+            if (!Directory.Exists(logsDirectory.FullName))
+            {
+                Directory.CreateDirectory(logsDirectory.FullName);
+            }
+            return logsDirectory;
         }
 
         public static bool WriteWorldToFile(World world, FileInfo outputFile)

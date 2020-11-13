@@ -18,6 +18,6 @@ namespace Unity.Entities.Runtime.Build
         public virtual Type[] UsedComponents { get; } = Array.Empty<Type>();
         public BuildContext BuildContext;
         public BuildAssemblyCache AssemblyCache;
-        public string OutputDir;
+        public string LogDirectoryPath;
     }
 }

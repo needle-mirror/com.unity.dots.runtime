@@ -14,7 +14,7 @@ namespace Unity.Tiny.EntryPoint
 
             // Setup the global static string interning storage
             TempMemoryScope.EnterScope();
-            WordStorage.Setup();
+            WordStorage.Initialize();
             TempMemoryScope.ExitScope();
 
             // A UnityInstance can exist per game state (there may potentially be more than one)
@@ -46,7 +46,7 @@ namespace Unity.Tiny.EntryPoint
         {
             // Cleanup of word storage
             TempMemoryScope.EnterScope();
-            WordStorage.Instance.Dispose();
+            WordStorage.Shutdown();
             TempMemoryScope.ExitScope();
 
             DotsRuntime.Shutdown();
